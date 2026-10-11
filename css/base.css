@@ -1,0 +1,91 @@
+/* DVAGO design tokens + shared primitives */
+:root {
+  --g-50: #F3FAEE;
+  --g-100: #E3F3D6;
+  --g-200: #C9E8AF;
+  --g-300: #A8DA7E;
+  --g-400: #8FCB5A;
+  --g-500: #78B943;
+  --g-600: #63A033;
+  --g-700: #4E8A2A;
+  --g-800: #2F5E19;
+  --g-900: #143A0E;
+  --g-950: #071A07;
+  --gold: #FFD66B;
+  --red: #E5484D;
+  --amber: #F5A524;
+  --blue: #3B82F6;
+  --violet: #8B5CF6;
+  --teal: #14B8A6;
+  --font: 'Inter', system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --font-display: 'Poppins', 'Inter', system-ui, sans-serif;
+  --ease: cubic-bezier(.22, .8, .25, 1);
+  --radius: 14px;
+}
+
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+html { -webkit-text-size-adjust: 100%; }
+body { font-family: var(--font); line-height: 1.5; -webkit-font-smoothing: antialiased; }
+button, input, select, textarea { font: inherit; color: inherit; }
+button { cursor: pointer; border: none; background: none; }
+img, svg { display: block; }
+a { color: inherit; }
+.ico { flex-shrink: 0; }
+.hidden { display: none !important; }
+.sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+
+:focus-visible { outline: 2px solid var(--g-400); outline-offset: 2px; border-radius: 6px; }
+
+/* Buttons */
+.btn {
+  display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+  height: 44px; padding: 0 20px; border-radius: 12px;
+  font-weight: 600; font-size: 14.5px; letter-spacing: .01em; white-space: nowrap;
+  transition: transform .18s var(--ease), box-shadow .2s var(--ease), background .2s, opacity .2s, border-color .2s;
+  user-select: none;
+}
+.btn:active { transform: translateY(1px) scale(.99); }
+.btn:disabled { opacity: .45; cursor: not-allowed; transform: none !important; }
+.btn-lg { height: 54px; padding: 0 30px; font-size: 16px; border-radius: 14px; }
+.btn-sm { height: 34px; padding: 0 12px; font-size: 13px; border-radius: 9px; gap: 6px; }
+.btn-icon { width: 40px; padding: 0; }
+.btn-primary {
+  color: #fff;
+  background: linear-gradient(135deg, var(--g-500), var(--g-700));
+  box-shadow: 0 8px 24px -8px rgba(120, 185, 67, .65), inset 0 1px 0 rgba(255, 255, 255, .25);
+}
+.btn-primary:hover:not(:disabled) { transform: translateY(-1px); box-shadow: 0 12px 30px -8px rgba(120, 185, 67, .8), inset 0 1px 0 rgba(255, 255, 255, .3); }
+.btn-shine { position: relative; overflow: hidden; }
+.btn-shine::after {
+  content: ''; position: absolute; top: 0; left: -60%; width: 40%; height: 100%;
+  background: linear-gradient(100deg, transparent, rgba(255, 255, 255, .45), transparent);
+  transform: skewX(-20deg); animation: shine 3.2s infinite;
+}
+@keyframes shine { 0%, 60% { left: -60%; } 100% { left: 130%; } }
+.btn-danger { color: #fff; background: var(--red); }
+
+/* Toasts */
+.toast-wrap { position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%); display: flex; flex-direction: column; gap: 10px; z-index: 10000; pointer-events: none; width: min(92vw, 420px); }
+.toast {
+  display: flex; align-items: center; gap: 10px; padding: 12px 16px; border-radius: 12px;
+  background: rgba(17, 27, 18, .94); color: #fff; font-size: 14px; box-shadow: 0 12px 32px rgba(0, 0, 0, .3);
+  border: 1px solid rgba(255, 255, 255, .1); backdrop-filter: blur(12px);
+  opacity: 0; transform: translateY(12px) scale(.98); transition: all .35s var(--ease);
+}
+.toast.show { opacity: 1; transform: none; }
+.toast-success .ico { color: var(--g-400); }
+.toast-error .ico { color: #ff8a8e; }
+.toast-info .ico { color: var(--gold); }
+
+/* Logo */
+.dvago-logo { width: auto; height: 100%; overflow: visible; }
+
+/* Score ring (shared) */
+.ring { --size: 64px; --val: 0; --c: var(--g-500); width: var(--size); height: var(--size); border-radius: 50%; display: grid; place-items: center; position: relative;
+  background: conic-gradient(var(--c) calc(var(--val) * 1%), var(--ring-track, rgba(0,0,0,.08)) 0); }
+.ring::before { content: ''; position: absolute; inset: 6px; border-radius: 50%; background: var(--ring-bg, #fff); }
+.ring > span { position: relative; font-weight: 800; font-family: var(--font-display); }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: .001ms !important; animation-iteration-count: 1 !important; transition-duration: .001ms !important; }
+}
