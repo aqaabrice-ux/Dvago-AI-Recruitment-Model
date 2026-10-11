@@ -1,0 +1,28 @@
+# Render blueprint: free web service for the DVAGO platform (demo / presentation use)
+services:
+  - type: web
+    name: dvago-ai-recruiter
+    runtime: node
+    plan: free
+    buildCommand: npm install
+    startCommand: node server.js
+    healthCheckPath: /api/health
+    envVars:
+      # Secrets: Render asks you to type these in its dashboard (they are NOT stored in this file)
+      - key: ADMIN_EMAIL
+        sync: false
+      - key: ADMIN_PASSWORD
+        sync: false
+      - key: GROQ_API_KEY
+        sync: false
+      # Optional: only needed if you want real emails to be sent
+      - key: SMTP_HOST
+        sync: false
+      - key: SMTP_PORT
+        sync: false
+      - key: SMTP_USER
+        sync: false
+      - key: SMTP_PASS
+        sync: false
+      - key: SMTP_FROM
+        sync: false

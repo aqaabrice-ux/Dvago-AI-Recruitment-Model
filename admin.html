@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>DVAGO Talent Console</title>
+<link rel="icon" href="assets/favicon.svg" type="image/svg+xml">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Poppins:wght@600;700;800&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="css/base.css">
+<link rel="stylesheet" href="css/admin.css">
+<script>
+  try { const t = localStorage.getItem('dvago_admin_theme'); if (t) document.documentElement.setAttribute('data-theme', t); } catch (e) {}
+</script>
+</head>
+<body class="adm">
+  <!-- Login -->
+  <section class="login hidden" id="login">
+    <div class="login-brand">
+      <canvas id="loginFx"></canvas>
+      <div class="lb-inner">
+        <div class="lb-logo" id="lbLogo"></div>
+        <span class="lb-pill">Talent Console</span>
+        <h1>Hire smarter with <span>SARAH</span>, your AI recruiter.</h1>
+        <p>Voice interviews, real-world case studies and proctored assessments — scored instantly and ready for your decision.</p>
+        <ul class="lb-feats">
+          <li><span id="lf1"></span>AI-scored voice interviews &amp; transcripts</li>
+          <li><span id="lf2"></span>Role-specific case studies for every DVAGO position</li>
+          <li><span id="lf3"></span>Integrity monitoring, analytics &amp; hiring pipeline</li>
+        </ul>
+      </div>
+    </div>
+    <div class="login-form-wrap">
+      <form class="login-card" id="loginForm" autocomplete="on">
+        <div class="lc-head"><h2>Welcome back</h2><p>Sign in to the DVAGO recruitment dashboard</p></div>
+        <label class="fld"><span>Work email</span><input class="inp" id="lEmail" type="email" autocomplete="username" required placeholder="admin@dvago.com"></label>
+        <label class="fld"><span>Password</span><div class="pw"><input class="inp" id="lPass" type="password" autocomplete="current-password" required placeholder="••••••••"><button type="button" id="pwToggle" aria-label="Show password"></button></div></label>
+        <div class="lc-err hidden" id="lErr"></div>
+        <button class="btn btn-primary btn-lg" type="submit" id="lBtn" style="width:100%">Sign in</button>
+        <div class="lc-hint" id="lHint"></div>
+      </form>
+    </div>
+  </section>
+
+  <!-- App -->
+  <div class="app hidden" id="app">
+    <aside class="side" id="side">
+      <div class="side-logo" id="sideLogo"></div>
+      <div class="side-sub">Talent Console</div>
+      <nav class="nav" id="nav"></nav>
+      <div class="side-card" id="sideCard"></div>
+    </aside>
+    <div class="main">
+      <header class="top">
+        <button class="icon-btn mobile-only" id="menuBtn" aria-label="Menu"></button>
+        <div class="search" id="gSearchWrap"><span id="gSearchIco"></span><input id="gSearch" placeholder="Search candidates by name, email, role…" autocomplete="off"><kbd>/</kbd></div>
+        <div class="top-right">
+          <span class="mode-badge" id="modeBadge"></span>
+          <button class="icon-btn" id="themeBtn" aria-label="Toggle theme"></button>
+          <button class="icon-btn" id="bellBtn" aria-label="Notifications"><span class="dot hidden" id="bellDot"></span></button>
+          <div class="me" id="meBtn" tabindex="0"><span class="av">AD</span><span class="me-txt"><b>HR Admin</b><small id="meEmail">admin@dvago.com</small></span></div>
+        </div>
+      </header>
+      <main class="view" id="view"></main>
+    </div>
+  </div>
+
+  <div class="dd hidden" id="dd"></div>
+  <div class="modal-back hidden" id="mBack"><div class="m-card" id="mCard" role="dialog" aria-modal="true"></div></div>
+
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+  <script src="js/effects.js"></script>
+  <script src="js/questions.js"></script>
+  <script src="js/evaluator.js"></script>
+  <script src="js/store.js"></script>
+  <script src="js/demo-data.js"></script>
+  <script src="js/admin.js"></script>
+</body>
+</html>

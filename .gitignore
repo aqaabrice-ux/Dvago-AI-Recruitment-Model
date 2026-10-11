@@ -1,0 +1,6 @@
+# Secrets and local data must never be uploaded
+.env
+data/
+node_modules/
+.claude/
+*.log

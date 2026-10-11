@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0B2410">
+<title>DVAGO AI Interview</title>
+<link rel="icon" href="assets/favicon.svg" type="image/svg+xml">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Poppins:wght@500;600;700;800&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="css/base.css">
+<link rel="stylesheet" href="css/candidate.css">
+</head>
+<body class="cand">
+  <!-- Ambient background -->
+  <div class="bg" aria-hidden="true">
+    <div class="bg-grad"></div>
+    <div class="aurora a1"></div>
+    <div class="aurora a2"></div>
+    <div class="aurora a3"></div>
+    <div class="bg-grid"></div>
+    <canvas id="glitter"></canvas>
+    <div class="bg-vignette"></div>
+  </div>
+
+  <!-- Top bar -->
+  <header class="topbar hidden" id="topbar">
+    <div class="tb-logo" id="tbLogo"></div>
+    <nav class="tb-steps" id="tbSteps" aria-label="Interview progress"></nav>
+    <div class="tb-right">
+      <div class="tb-timer hidden" id="tbTimer"></div>
+      <div class="tb-proctor hidden" id="tbProctor" title="Proctoring is active"></div>
+      <button class="tb-btn" id="muteBtn" title="Mute / unmute SARAH" aria-label="Mute or unmute SARAH"></button>
+    </div>
+  </header>
+
+  <main id="stage" class="stage" aria-live="polite"></main>
+
+  <!-- Modal host -->
+  <div class="modal-host hidden" id="modalHost" role="dialog" aria-modal="true"></div>
+
+  <noscript><div style="padding:40px;color:#fff;text-align:center">Please enable JavaScript to take your DVAGO interview.</div></noscript>
+
+  <script src="js/effects.js"></script>
+  <script src="js/questions.js"></script>
+  <script src="js/evaluator.js"></script>
+  <script src="js/store.js"></script>
+  <script src="js/voice.js"></script>
+  <script src="js/vad.js"></script>
+  <script src="js/candidate.js"></script>
+</body>
+</html>
