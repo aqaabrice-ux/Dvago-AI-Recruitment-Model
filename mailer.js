@@ -70,7 +70,7 @@ async function send({ to, subject, html, text, meta }) {
   } catch (e) {
     console.warn('mailer: could not save local copy', e.message);
   }
-  console.log(`[mail] ${email.status === 'sent' ? 'SENT' : email.status.toUpperCase()} → ${to} · ${subject}`);
+  console.log(`[mail] ${email.status === 'sent' ? 'SENT' : email.status.toUpperCase()} → ${to} · ${subject}${email.error ? ' · ERROR: ' + email.error : ''}`);
   return email;
 }
 
