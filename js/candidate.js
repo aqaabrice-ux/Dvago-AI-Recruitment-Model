@@ -1,4 +1,4 @@
-﻿/* DVAGO candidate portal — SARAH guided interview flow */
+/* DVAGO candidate portal — SARAH guided interview flow */
 (function () {
   const B = window.DVAGO_BANK, I = UI.icon, esc = UI.esc;
   const $ = (s, r = document) => r.querySelector(s);
@@ -6,7 +6,7 @@
   const stageEl = $('#stage');
   const SESSION_KEY = 'dvago_session_v2';
   const CLOSED_KEY = 'dvago_closed_v2';
-  const PDFJS = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js';
+  const PDFJS = 'https://cdnjs.cloudflare.com/ajax/libs/pdaf.js/3.11.174/pdf.min.js';
   const PDFJS_WORKER = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
   const MAMMOTH = 'https://cdnjs.cloudflare.com/ajax/libs/mammoth/1.6.0/mammoth.browser.min.js';
   const ANSWER_LIMIT = 120;
@@ -22,7 +22,7 @@
     { label: 'Profile', stages: ['profile'] },
     { label: 'Role', stages: ['role', 'position', 'jd'] },
     { label: 'Voice interview', stages: ['syscheck', 'voice'] },
-    { label: 'Assessment', stages: ['brief', 'exam', 'video'] },
+    { label: 'Assessment', stages: ['brief', 'exam'] },
     { label: 'Done', stages: ['processing', 'done'] }
   ];
 
@@ -182,6 +182,58 @@
     } catch (e) {}
   }
   function exitFullscreen() { try { if (document.fullscreenElement) document.exitFullscreen(); } catch (e) {} }
+
+  // ---------------- persistent interview camera ----------------
+  // The candidate's camera turns on right after the profile/resume step and stays on
+  // (shown as a small live preview) for the whole interview, until they finish.
+  const Cam = {
+    stream: null, pip: null,
+    supported() { return !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia); },
+    active() { return !!(this.stream && this.stream.active); },
+    async start() {
+      if (this.active()) { this.showPip(); return true; }
+      if (!this.supported()) return false;
+      try {
+        this.stream = await navigator.mediaDevices.getUserMedia({ video: { width: { ideal: 640 }, height: { ideal: 480 }, facingMode: 'user' }, audio: false });
+      } catch (e) { console.warn('[camera] unavailable:', e && (e.name || e.message) || e); this.stream = null; return false; }
+      this.showPip();
+      return true;
+    },
+    showPip() {
+      if (!this.stream) return;
+      if (!this.pip) {
+        this.pip = document.createElement('div');
+        this.pip.className = 'cam-pip';
+        this.pip.innerHTML = `<video autoplay muted playsinline></video><div class="cam-tag"><span class="cam-dot"></span>Camera on</div>`;
+        document.body.appendChild(this.pip);
+      }
+      const v = this.pip.querySelector('video');
+      if (v && v.srcObject !== this.stream) { v.srcObject = this.stream; v.style.transform = 'scaleX(-1)'; }
+      this.pip.classList.remove('hidden');
+    },
+    stop() {
+      if (this.stream) { this.stream.getTracks().forEach((t) => { try { t.stop(); } catch (e) {} }); this.stream = null; }
+      if (this.pip) { this.pip.remove(); this.pip = null; }
+    }
+  };
+
+  // Notify the candidate, turn the camera on, then continue to the next stage.
+  function enableCameraThen(next) {
+    if (Cam.active()) return next();
+    const m = modal(`<div class="m-ico">${I('camera', 30)}</div>
+      <h3 class="h3">We're turning on your camera</h3>
+      <p>For a fair and secure interview, your camera will stay on from here until you finish. Please choose <b>Allow</b> when your browser asks for camera access. Your video is used only for this DVAGO interview.</p>
+      <div class="row"><button class="btn btn-primary btn-lg" id="camOk">Turn on camera &amp; continue ${I('right', 16)}</button></div>`);
+    $('#camOk', m).addEventListener('click', async () => {
+      const btn = $('#camOk', m);
+      btn.disabled = true; btn.innerHTML = `${I('refresh', 16)} Turning on camera…`;
+      const ok = await Cam.start();
+      closeModal();
+      if (ok) UI.toast('Camera is on — you are all set.', 'success');
+      else UI.toast('We could not turn on your camera. You can continue, but please allow camera access for a complete interview.', 'error', 4500);
+      next();
+    });
+  }
 
   // ================= STAGES =================
 
@@ -442,7 +494,7 @@
           return;
         }
       } catch (e) {}
-      go('role');
+      enableCameraThen(() => go('role'));
     });
   }
 
@@ -1519,212 +1571,11 @@
     S.exam.completedAt = new Date().toISOString();
     S._autoSubmitted = !!auto;
     exitFullscreen();
-    // Always submit to server first. Video intro happens AFTER submission (no timer pressure).
     go('processing');
   }
 
-  // ---------- Optional video intro ----------
-  const VIDEO_MAX_SECONDS = 60;
-  const VIDEO_MIN_SECONDS = 10;
-
-  function pickVideoMime() {
-    if (!window.MediaRecorder) return '';
-    const candidates = ['video/webm;codecs=vp9,opus', 'video/webm;codecs=vp8,opus', 'video/webm', 'video/mp4'];
-    return candidates.find((m) => MediaRecorder.isTypeSupported(m)) || '';
-  }
-
-  function renderVideoIntro() {
-    const supported = pickVideoMime() && navigator.mediaDevices && navigator.mediaDevices.getUserMedia;
-    const alreadyRecorded = !!(S.videoIntro && S.videoIntro.dataUrl);
-    const V = { phase: alreadyRecorded ? 'preview' : 'intro', stream: null, rec: null, chunks: [], timerId: null, startedAt: 0, mime: pickVideoMime(), blob: null, url: alreadyRecorded ? S.videoIntro.dataUrl : null };
-    onLeave(() => {
-      if (V.timerId) clearInterval(V.timerId);
-      if (V.stream) V.stream.getTracks().forEach((t) => t.stop());
-      if (V.rec && V.rec.state !== 'inactive') { try { V.rec.stop(); } catch (e) {} }
-    });
-
-    draw();
-
-    async function draw() {
-      if (V.phase === 'intro') return drawIntro();
-      if (V.phase === 'record') return drawRecord();
-      if (V.phase === 'preview') return drawPreview();
-    }
-
-    function drawIntro() {
-      screen(`<div class="glass panel panel-narrow video-wrap">
-        <div style="display:flex;align-items:center;gap:10px;padding:10px 14px;background:#EDF4E6;border:1px solid var(--line-2);border-radius:12px;margin-bottom:16px;font-size:13px;color:var(--g-800)">
-          ${I('check', 16).replace('class="ico', 'style="color:var(--g-500);flex-shrink:0" class="ico')}
-          <span>Your assessment has been submitted successfully — <b>Ref: ${esc((S.result && S.result.ref) || '')}</b>. This next step is a bonus.</span>
-        </div>
-        <span class="eyebrow">${I('sparkles', 14)} Optional · Boost your chances</span>
-        <h2 class="h2" style="margin-top:10px">Record a 60-second video introduction</h2>
-        <p class="lead" style="margin-top:8px">Candidates who introduce themselves on video are more likely to be shortlisted by DVAGO's hiring team. It's completely optional — but recommended.</p>
-        <div class="video-benefits">
-          <div class="vb"><div class="vb-ico">${I('user', 18)}</div><div><b>Show your personality</b><span>A short clip helps us see the real you beyond the answers.</span></div></div>
-          <div class="vb"><div class="vb-ico">${I('star', 18)}</div><div><b>Stand out from the crowd</b><span>Only ~30% of candidates record a video — be one of them.</span></div></div>
-          <div class="vb"><div class="vb-ico">${I('clock', 18)}</div><div><b>Takes under 2 minutes</b><span>Max 60 seconds of recording. You can re-record if you want.</span></div></div>
-        </div>
-        ${!supported ? `<div class="err-msg" style="justify-content:center;background:#FFF4DF;color:#8A5A00;padding:12px;border-radius:12px;border:1px solid #F0C86A">${I('alert', 15)} Your browser does not support video recording. Please skip and submit, or try again from Chrome/Edge.</div>` : ''}
-        <div class="video-prompt">
-          <h4>${I('mic', 14)} What to say</h4>
-          <p>"Hi, my name is _____. I'm applying for the ${esc((S.position && S.position.title) || role().title)} role at DVAGO because _____. What makes me a great fit is _____. Thank you for considering my application."</p>
-        </div>
-        <div class="row-end"><button class="btn btn-ghost btn-lg" id="vSkip">${I('right', 16)} Skip and finish</button>${supported ? `<button class="btn btn-primary btn-lg btn-shine" id="vStart">${I('mic', 18)} Record intro video</button>` : ''}</div>
-      </div>`);
-      $('#vSkip').addEventListener('click', () => { S.videoIntro = null; save(); go('done'); });
-      const vs = $('#vStart'); if (vs) vs.addEventListener('click', startRecord);
-    }
-
-    async function startRecord() {
-      V.phase = 'record';
-      screen(`<div class="glass panel video-wrap">
-        <span class="eyebrow">${I('mic', 14)} Recording your intro</span>
-        <h2 class="h2" style="margin-top:10px">Smile — SARAH is recording!</h2>
-        <p class="lead" style="margin-top:6px">You have up to <b>${VIDEO_MAX_SECONDS} seconds</b>. Speak clearly and introduce yourself. Click stop when done.</p>
-        <div class="video-stage">
-          <div class="video-preview">
-            <video id="camPrev" autoplay muted playsinline></video>
-            <div class="video-overlay"><span class="rec-dot"></span><span id="recTimer">00:00</span></div>
-          </div>
-          <div class="video-side">
-            <div class="video-prompt">
-              <h4>${I('star', 14)} Suggested script</h4>
-              <p>"Hi, I'm _____. I'm applying for ${esc((S.position && S.position.title) || role().title)}. I'm a great fit because _____. Thanks for considering me."</p>
-            </div>
-            <p class="small muted">Tip: look at the camera, not the screen. Make sure your face is well-lit.</p>
-          </div>
-        </div>
-        <div class="row-end"><button class="btn btn-ghost" id="vCancel">${I('x', 16)} Cancel</button><button class="btn btn-primary btn-lg" id="vStop" disabled>${I('stop', 18)} Stop recording</button></div>
-      </div>`);
-      $('#vCancel').addEventListener('click', () => { teardownStream(); V.phase = 'intro'; draw(); });
-
-      try {
-        V.stream = await navigator.mediaDevices.getUserMedia({ video: { width: { ideal: 640 }, height: { ideal: 480 } }, audio: true });
-      } catch (e) {
-        UI.toast('Camera/microphone access denied — please allow and try again.', 'error');
-        V.phase = 'intro';
-        return draw();
-      }
-      const prev = $('#camPrev');
-      if (prev) { prev.srcObject = V.stream; prev.style.transform = 'scaleX(-1)'; }
-      try {
-        V.rec = new MediaRecorder(V.stream, { mimeType: V.mime, videoBitsPerSecond: 500000, audioBitsPerSecond: 64000 });
-      } catch (e) {
-        try { V.rec = new MediaRecorder(V.stream, { videoBitsPerSecond: 500000 }); } catch (e2) {
-          UI.toast('Could not start the recorder — your browser may not support this.', 'error');
-          teardownStream(); V.phase = 'intro'; return draw();
-        }
-      }
-      V.chunks = [];
-      V.rec.ondataavailable = (e) => { if (e.data && e.data.size) V.chunks.push(e.data); };
-      V.rec.onstop = finishRecord;
-      V.rec.start(500);
-      V.startedAt = Date.now();
-      $('#vStop').disabled = false;
-      $('#vStop').addEventListener('click', () => V.rec && V.rec.state !== 'inactive' && V.rec.stop());
-      V.timerId = setInterval(() => {
-        const secs = Math.floor((Date.now() - V.startedAt) / 1000);
-        const t = $('#recTimer'); if (t) t.textContent = String(Math.floor(secs / 60)).padStart(2, '0') + ':' + String(secs % 60).padStart(2, '0');
-        if (secs >= VIDEO_MAX_SECONDS) { try { V.rec.stop(); } catch (e) {} }
-      }, 250);
-    }
-
-    function teardownStream() {
-      if (V.timerId) { clearInterval(V.timerId); V.timerId = null; }
-      if (V.stream) { V.stream.getTracks().forEach((t) => t.stop()); V.stream = null; }
-    }
-
-    async function finishRecord() {
-      const duration = Math.floor((Date.now() - V.startedAt) / 1000);
-      teardownStream();
-      V.blob = new Blob(V.chunks, { type: V.mime || 'video/webm' });
-      V.url = URL.createObjectURL(V.blob);
-      V.duration = duration;
-      V.phase = 'preview';
-      draw();
-      // Convert to dataUrl asynchronously — stored on V for the upload step.
-      try {
-        V.dataUrl = await new Promise((resolve, reject) => {
-          const reader = new FileReader();
-          reader.onload = () => resolve(reader.result);
-          reader.onerror = () => reject(new Error('read failed'));
-          reader.readAsDataURL(V.blob);
-        });
-        S.videoIntro = { dataUrl: V.dataUrl, duration, mime: V.blob.type, size: V.blob.size };
-        save();
-      } catch (e) {
-        console.error('Video blob read failed', e);
-        UI.toast('Could not process the video. Please try recording again.', 'error');
-      }
-    }
-
-    function drawPreview() {
-      const url = V.url || (S.videoIntro && S.videoIntro.dataUrl) || '';
-      const duration = V.duration || (S.videoIntro && S.videoIntro.duration) || 0;
-      const sizeKB = V.blob ? Math.round(V.blob.size / 1024) : (S.videoIntro && S.videoIntro.size ? Math.round(S.videoIntro.size / 1024) : 0);
-      const tooShort = duration < VIDEO_MIN_SECONDS;
-      screen(`<div class="glass panel panel-narrow video-wrap">
-        <span class="eyebrow">${I('check', 14)} Preview your intro</span>
-        <h2 class="h2" style="margin-top:10px">${tooShort ? 'That was a bit short — try again?' : 'Looks great!'}</h2>
-        <p class="lead" style="margin-top:6px">${tooShort ? `Please record at least ${VIDEO_MIN_SECONDS} seconds for a stronger introduction.` : 'Review your video below. You can submit it, re-record, or skip it entirely.'}</p>
-        <div class="video-preview-full">
-          <video src="${esc(url)}" controls playsinline></video>
-          <div class="video-meta"><span>${I('clock', 13)} ${duration}s</span><span>${I('file', 13)} ${sizeKB} KB</span></div>
-        </div>
-        <div class="row-end">
-          <button class="btn btn-ghost" id="vRetry">${I('refresh', 16)} Re-record</button>
-          <div style="display:flex;gap:10px">
-            <button class="btn btn-ghost" id="vSkip">${I('right', 16)} Skip and submit without video</button>
-            <button class="btn btn-primary btn-lg btn-shine" id="vUse" ${tooShort ? 'disabled' : ''}>${I('check', 18)} Submit with video</button>
-          </div>
-        </div>
-      </div>`);
-      $('#vRetry').addEventListener('click', () => { S.videoIntro = null; V.blob = null; V.url = null; save(); V.phase = 'intro'; draw(); });
-      $('#vSkip').addEventListener('click', () => { S.videoIntro = null; save(); go('done'); });
-      $('#vUse').addEventListener('click', async () => {
-        if (tooShort) return;
-        const btn = $('#vUse'); btn.disabled = true; btn.innerHTML = `${I('refresh', 18)} Preparing video…`;
-        // Wait up to 5s for the FileReader to finish converting the blob
-        let dataUrl = V.dataUrl || (S.videoIntro && S.videoIntro.dataUrl) || null;
-        if (!dataUrl && V.blob) {
-          try {
-            dataUrl = await new Promise((resolve, reject) => {
-              const reader = new FileReader();
-              reader.onload = () => resolve(reader.result);
-              reader.onerror = () => reject(new Error('read failed'));
-              reader.readAsDataURL(V.blob);
-            });
-            V.dataUrl = dataUrl;
-          } catch (e) {}
-        }
-        if (!dataUrl) {
-          UI.toast('Video could not be prepared. Please re-record.', 'error');
-          btn.disabled = false; btn.innerHTML = `${I('check', 18)} Submit with video`;
-          return;
-        }
-        btn.innerHTML = `${I('refresh', 18)} Uploading… (${Math.round((V.blob && V.blob.size || 0) / 1024)} KB)`;
-        if (!S.submissionId) {
-          UI.toast('Submission not found. Please skip to finish.', 'error');
-          btn.disabled = false; btn.innerHTML = `${I('check', 18)} Submit with video`;
-          return;
-        }
-        try {
-          const r = await Store.uploadVideoIntro(S.submissionId, { dataUrl, duration: V.duration, mime: (V.blob && V.blob.type) || 'video/webm', size: V.blob && V.blob.size });
-          console.log('video upload result:', r);
-          UI.toast('Video uploaded successfully', 'success');
-          if (S.videoIntro) S.videoIntro.dataUrl = null;
-          V.dataUrl = null;
-          save();
-          go('done');
-        } catch (e) {
-          console.error('Video upload failed:', e);
-          UI.toast('Upload failed: ' + (e.message || 'unknown error') + '. Your assessment is already submitted — you can skip.', 'error');
-          btn.disabled = false; btn.innerHTML = `${I('check', 18)} Try again`;
-        }
-      });
-    }
-  }
+  // The end-of-interview video recorder has been removed: the candidate camera now
+  // stays on throughout the interview via the persistent Cam manager defined above.
 
   async function renderProcessing() {
     if (S.submissionId && S.result) return go('done');
@@ -1760,8 +1611,8 @@
       if (S.resume) S.resume.dataUrl = null;
       save();
       await anim;
-      // Submission locked in. Now offer video intro — unless time ran out (auto-submit).
-      setTimeout(() => go(S._autoSubmitted ? 'done' : 'video'), 500);
+      // Submission locked in — go straight to the completion screen.
+      setTimeout(() => go('done'), 500);
     } catch (e) {
       console.error(e);
       await anim;
@@ -1774,6 +1625,7 @@
 
   function renderDone() {
     exitFullscreen();
+    Cam.stop();
     const f = first();
     const hl = settings.showCandidateFeedback !== false && S.result && S.result.strengths.length;
     screen(`<div class="done-badge">${I('check', 60)}</div>
@@ -1802,6 +1654,7 @@
     const ref = (S && S.result && S.result.ref) || '';
     try { sessionStorage.removeItem(SESSION_KEY); sessionStorage.setItem(CLOSED_KEY, ref || '1'); } catch (e) {}
     exitFullscreen();
+    Cam.stop();
     teardown.forEach((fn) => { try { fn(); } catch (e) {} });
     teardown = [];
     history.replaceState(null, '', location.pathname + location.search);
@@ -1822,7 +1675,7 @@
       <p class="small muted">Questions? Contact DVAGO HR · careers@dvago.pk</p>`, 'closed');
   }
 
-  const RENDER = { splash: renderSplash, greet: renderGreet, schedule: renderSchedule, scheduled: renderScheduled, profile: renderProfile, role: renderRole, position: renderPosition, jd: renderJD, syscheck: renderSyscheck, voice: renderVoice, brief: renderBrief, exam: renderExam, video: renderVideoIntro, processing: renderProcessing, done: renderDone };
+  const RENDER = { splash: renderSplash, greet: renderGreet, schedule: renderSchedule, scheduled: renderScheduled, profile: renderProfile, role: renderRole, position: renderPosition, jd: renderJD, syscheck: renderSyscheck, voice: renderVoice, brief: renderBrief, exam: renderExam, processing: renderProcessing, done: renderDone };
 
   // ---------------- boot ----------------
   async function boot() {
@@ -1845,6 +1698,8 @@
     if (saved && saved.v === 2 && (saved.inviteToken || null) === (token || null) && saved.stage && !['splash', 'closed', 'loggedout'].includes(saved.stage)) {
       S = saved;
       if (S.stage === 'exam' && S.exam && Date.now() >= S.exam.endsAt) { S.exam.completedAt = new Date(S.exam.endsAt).toISOString(); S.stage = 'processing'; }
+      // Camera was on before the reload for these stages — turn it back on (best effort; no modal).
+      if (['role', 'position', 'jd', 'syscheck', 'voice', 'brief', 'exam', 'processing'].includes(S.stage)) { Cam.start().catch(() => {}); }
       UI.toast('Welcome back — resuming where you left off.', 'success');
       history.replaceState({ dvago: S.stage }, '');
       return go(S.stage, true);
