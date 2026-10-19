@@ -212,6 +212,17 @@ body.cand * { scrollbar-color: var(--line-2) transparent; }
 .chip { font-size: 12px; padding: 4px 10px; border-radius: 99px; background: var(--surface-2); border: 1px solid var(--line); color: var(--text-2); }
 .chip-g { background: #EDF4E6; border-color: var(--line-2); color: var(--g-800); }
 
+/* Real-time resume relevance */
+.rel-badge { display: flex; align-items: center; gap: 7px; padding: 8px 11px; border-radius: 11px; font-size: 12.5px; font-weight: 600; line-height: 1.35; }
+.rel-badge .ico { flex-shrink: 0; }
+.rel-strong { background: #EDF4E6; border: 1px solid var(--line-2); color: var(--g-800); }
+.rel-moderate { background: #FFF4DF; border: 1px solid #F0C86A; color: #8A5A00; }
+.rel-weak { background: #FDE4E5; border: 1px solid #F3B0B2; color: #B21E22; }
+.rel-warn { display: flex; gap: 12px; align-items: flex-start; margin: 16px 0 4px; padding: 14px 16px; border-radius: 14px; background: #FDE4E5; border: 1px solid #F3B0B2; color: #8A1E22; }
+.rel-warn .ico { flex-shrink: 0; color: #C8242A; margin-top: 1px; }
+.rel-warn b { display: block; font-size: 14px; color: #8A1E22; }
+.rel-warn span { font-size: 13px; color: #A14043; line-height: 1.5; }
+
 .form-card { padding: 34px; }
 .form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px 18px; margin-top: 24px; }
 .field { display: flex; flex-direction: column; gap: 7px; }
