@@ -185,35 +185,170 @@
 
   // ---------------- persistent interview camera ----------------
   // The candidate's camera turns on right after the profile/resume step and stays on
-  // (shown as a small live preview) for the whole interview, until they finish.
+  // (shown as a small, draggable live preview) for the whole interview. The feed is
+  // recorded at a low bitrate and uploaded with the submission so HR can review it.
+  const REC_BITRATE = 120000; // ~120 kbps keeps a long session well under the 60 MB upload cap
   const Cam = {
-    stream: null, pip: null,
+    stream: null, pip: null, rec: null, chunks: [], recMime: '', startedAt: 0,
     supported() { return !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia); },
     active() { return !!(this.stream && this.stream.active); },
     async start() {
       if (this.active()) { this.showPip(); return true; }
       if (!this.supported()) return false;
       try {
-        this.stream = await navigator.mediaDevices.getUserMedia({ video: { width: { ideal: 640 }, height: { ideal: 480 }, facingMode: 'user' }, audio: false });
+        this.stream = await navigator.mediaDevices.getUserMedia({ video: { width: { ideal: 480 }, height: { ideal: 360 }, frameRate: { ideal: 15, max: 20 }, facingMode: 'user' }, audio: false });
       } catch (e) { console.warn('[camera] unavailable:', e && (e.name || e.message) || e); this.stream = null; return false; }
       this.showPip();
+      this.startRec();
       return true;
+    },
+    startRec() {
+      if (!window.MediaRecorder || !this.stream || (this.rec && this.rec.state === 'recording')) return;
+      const cands = ['video/webm;codecs=vp9', 'video/webm;codecs=vp8', 'video/webm', 'video/mp4'];
+      this.recMime = cands.find((m) => { try { return MediaRecorder.isTypeSupported(m); } catch (e) { return false; } }) || '';
+      try {
+        this.rec = new MediaRecorder(this.stream, this.recMime ? { mimeType: this.recMime, videoBitsPerSecond: REC_BITRATE } : { videoBitsPerSecond: REC_BITRATE });
+      } catch (e) { try { this.rec = new MediaRecorder(this.stream); } catch (e2) { this.rec = null; return; } }
+      this.chunks = [];
+      this.rec.ondataavailable = (e) => { if (e.data && e.data.size) this.chunks.push(e.data); };
+      this.startedAt = Date.now();
+      try { this.rec.start(2000); } catch (e) { this.rec = null; }
+    },
+    // Stop the recorder and return { dataUrl, duration, mime, size } (or null). Does not drop the stream.
+    async finishRec() {
+      if (!this.rec || !this.chunks) return null;
+      const duration = Math.round((Date.now() - this.startedAt) / 1000);
+      const stopped = new Promise((resolve) => {
+        if (this.rec.state === 'inactive') return resolve();
+        this.rec.onstop = () => resolve();
+        try { this.rec.stop(); } catch (e) { resolve(); }
+      });
+      await stopped;
+      if (!this.chunks.length) return null;
+      const blob = new Blob(this.chunks, { type: this.recMime || 'video/webm' });
+      if (!blob.size) return null;
+      try {
+        const dataUrl = await new Promise((res, rej) => { const r = new FileReader(); r.onload = () => res(r.result); r.onerror = () => rej(new Error('read failed')); r.readAsDataURL(blob); });
+        return { dataUrl, duration, mime: blob.type, size: blob.size };
+      } catch (e) { return null; }
     },
     showPip() {
       if (!this.stream) return;
       if (!this.pip) {
         this.pip = document.createElement('div');
         this.pip.className = 'cam-pip';
-        this.pip.innerHTML = `<video autoplay muted playsinline></video><div class="cam-tag"><span class="cam-dot"></span>Camera on</div>`;
+        this.pip.innerHTML = `<video autoplay muted playsinline></video><div class="cam-tag"><span class="cam-dot"></span>Camera on · drag to move</div>`;
         document.body.appendChild(this.pip);
+        makeDraggable(this.pip);
       }
       const v = this.pip.querySelector('video');
       if (v && v.srcObject !== this.stream) { v.srcObject = this.stream; v.style.transform = 'scaleX(-1)'; }
       this.pip.classList.remove('hidden');
     },
     stop() {
+      if (this.rec && this.rec.state !== 'inactive') { try { this.rec.stop(); } catch (e) {} }
+      this.rec = null; this.chunks = [];
       if (this.stream) { this.stream.getTracks().forEach((t) => { try { t.stop(); } catch (e) {} }); this.stream = null; }
       if (this.pip) { this.pip.remove(); this.pip = null; }
+      Guard.stop();
+    }
+  };
+
+  // Make the floating camera window draggable (mouse + touch) and kept inside the viewport.
+  function makeDraggable(el) {
+    let ox = 0, oy = 0, dragging = false;
+    const clamp = (x, y) => [
+      Math.max(6, Math.min(window.innerWidth - el.offsetWidth - 6, x)),
+      Math.max(6, Math.min(window.innerHeight - el.offsetHeight - 6, y))
+    ];
+    const move = (e) => {
+      if (!dragging) return;
+      const [x, y] = clamp(e.clientX - ox, e.clientY - oy);
+      el.style.left = x + 'px'; el.style.top = y + 'px';
+    };
+    const up = () => {
+      dragging = false; el.classList.remove('dragging');
+      window.removeEventListener('pointermove', move); window.removeEventListener('pointerup', up);
+    };
+    el.addEventListener('pointerdown', (e) => {
+      const r = el.getBoundingClientRect();
+      el.style.left = r.left + 'px'; el.style.top = r.top + 'px'; el.style.right = 'auto'; el.style.bottom = 'auto';
+      ox = e.clientX - r.left; oy = e.clientY - r.top;
+      dragging = true; el.classList.add('dragging');
+      window.addEventListener('pointermove', move); window.addEventListener('pointerup', up);
+      e.preventDefault();
+    });
+    // Keep it on-screen if the window is resized after a manual move.
+    window.addEventListener('resize', () => {
+      if (el.style.left === '' ) return;
+      const [x, y] = clamp(parseInt(el.style.left, 10) || 0, parseInt(el.style.top, 10) || 0);
+      el.style.left = x + 'px'; el.style.top = y + 'px';
+    });
+  }
+
+  // ---------------- screenshot / copy deterrents ----------------
+  // Browsers cannot fully block OS-level screenshots or a phone camera, but we can block the
+  // common ones (PrintScreen, right-click save, copy, Ctrl+P/S), blank the screen when the
+  // window loses focus (Snipping Tool / alt-tab), and log every attempt for HR.
+  const Guard = {
+    on: false, overlay: null,
+    start() {
+      if (this.on) return; this.on = true;
+      document.body.classList.add('no-shot');
+      document.addEventListener('keydown', this.onKeyDown, true);
+      document.addEventListener('keyup', this.onKeyUp, true);
+      document.addEventListener('contextmenu', this.onCtx, true);
+      window.addEventListener('blur', this.onBlur);
+      window.addEventListener('focus', this.onFocus);
+      document.addEventListener('visibilitychange', this.onVis);
+    },
+    stop() {
+      if (!this.on) return; this.on = false;
+      document.body.classList.remove('no-shot');
+      document.removeEventListener('keydown', this.onKeyDown, true);
+      document.removeEventListener('keyup', this.onKeyUp, true);
+      document.removeEventListener('contextmenu', this.onCtx, true);
+      window.removeEventListener('blur', this.onBlur);
+      window.removeEventListener('focus', this.onFocus);
+      document.removeEventListener('visibilitychange', this.onVis);
+      Guard.hideShield();
+    },
+    warn(msg) { try { UI.toast(msg, 'error', 2600); } catch (e) {} },
+    onCtx(e) { e.preventDefault(); },
+    onKeyDown(e) {
+      const k = (e.key || '').toLowerCase();
+      if (e.key === 'PrintScreen' || ((e.ctrlKey || e.metaKey) && ['p', 's', 'u', 'c'].includes(k))) {
+        e.preventDefault();
+        try { logEvent('screenshot_attempt', e.key); } catch (_) {}
+      }
+    },
+    onKeyUp(e) {
+      if (e.key === 'PrintScreen') {
+        try { navigator.clipboard && navigator.clipboard.writeText(''); } catch (_) {}
+        try { logEvent('screenshot_attempt', 'PrintScreen'); } catch (_) {}
+        Guard.flash();
+        Guard.warn('Screenshots are disabled during the interview.');
+      }
+    },
+    onBlur() { Guard.showShield(); try { logEvent('window_blur', ''); } catch (_) {} },
+    onFocus() { Guard.hideShield(); },
+    onVis() { if (document.hidden) Guard.showShield(); else Guard.hideShield(); },
+    showShield() {
+      if (!this.on) return;
+      if (!this.overlay) {
+        this.overlay = document.createElement('div');
+        this.overlay.className = 'shot-shield';
+        this.overlay.innerHTML = `<div class="ss-box">${I('eye', 30)}<b>Interview paused</b><span>Please return to this window to continue. This screen is hidden while it is not in focus.</span></div>`;
+        document.body.appendChild(this.overlay);
+      }
+      this.overlay.classList.add('on');
+    },
+    hideShield() { if (this.overlay) this.overlay.classList.remove('on'); },
+    flash() {
+      const f = document.createElement('div');
+      f.className = 'shot-flash';
+      document.body.appendChild(f);
+      setTimeout(() => f.remove(), 500);
     }
   };
 
@@ -228,6 +363,7 @@
       const btn = $('#camOk', m);
       btn.disabled = true; btn.innerHTML = `${I('refresh', 16)} Turning on camera…`;
       const ok = await Cam.start();
+      Guard.start(); // screenshot/copy deterrents run for the whole interview, with or without camera
       closeModal();
       if (ok) UI.toast('Camera is on — you are all set.', 'success');
       else UI.toast('We could not turn on your camera. You can continue, but please allow camera access for a complete interview.', 'error', 4500);
@@ -1611,6 +1747,14 @@
       if (S.resume) S.resume.dataUrl = null;
       save();
       await anim;
+      // Upload the interview camera recording for HR review (best effort; never blocks completion).
+      try {
+        const rec = await Cam.finishRec();
+        if (rec && rec.dataUrl && S.submissionId) {
+          await Store.uploadVideoIntro(S.submissionId, rec);
+          console.log('[camera] recording uploaded:', Math.round((rec.size || 0) / 1024) + ' KB, ' + rec.duration + 's');
+        }
+      } catch (e) { console.warn('[camera] recording upload failed:', e && e.message); }
       // Submission locked in — go straight to the completion screen.
       setTimeout(() => go('done'), 500);
     } catch (e) {
@@ -1699,7 +1843,7 @@
       S = saved;
       if (S.stage === 'exam' && S.exam && Date.now() >= S.exam.endsAt) { S.exam.completedAt = new Date(S.exam.endsAt).toISOString(); S.stage = 'processing'; }
       // Camera was on before the reload for these stages — turn it back on (best effort; no modal).
-      if (['role', 'position', 'jd', 'syscheck', 'voice', 'brief', 'exam', 'processing'].includes(S.stage)) { Cam.start().catch(() => {}); }
+      if (['role', 'position', 'jd', 'syscheck', 'voice', 'brief', 'exam', 'processing'].includes(S.stage)) { Cam.start().catch(() => {}); Guard.start(); }
       UI.toast('Welcome back — resuming where you left off.', 'success');
       history.replaceState({ dvago: S.stage }, '');
       return go(S.stage, true);
