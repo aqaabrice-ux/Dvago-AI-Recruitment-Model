@@ -435,7 +435,7 @@
     if (items.length === 0) return `<div class="empty"><div class="ei">${I('people', 24)}</div><h3>No candidates yet</h3><p>Invite candidates by clicking "New invitation", or load demo data to explore the dashboard.</p></div>`;
     return `<table class="tbl"><thead><tr><th>Candidate</th><th>Role</th><th>Score</th><th>Recommendation</th><th>Date</th></tr></thead><tbody>
       ${items.map((d) => `<tr data-id="${d.id}">
-        <td><div class="td-cand"><div class="av" style="background:${avColor(d.candidate.fullName)}">${initials(d.candidate.fullName)}</div><div><b>${esc(d.candidate.fullName)}${d.videoIntro && d.videoIntro.file ? ` <span class="vid-chip" title="Has intro video">${I('mic', 10)}</span>` : ''}</b><span>${esc(d.candidate.email)}</span></div></div></td>
+        <td><div class="td-cand"><div class="av" style="background:${avColor(d.candidate.fullName)}">${initials(d.candidate.fullName)}</div><div><b>${esc(d.candidate.fullName)}${d.videoIntro && d.videoIntro.file ? ` <span class="vid-chip" title="Has interview recording">${I('camera', 10)}</span>` : ''}</b><span>${esc(d.candidate.email)}</span></div></div></td>
         <td>${esc(d.roleTitle)}</td>
         <td>${scorePill(d.evaluation?.overall || 0)}${d.evaluation?.ai ? ' <span class="ai-tag">AI</span>' : ''}</td>
         <td>${recBadge(d.evaluation?.recommendation || '-')}</td>
@@ -512,7 +512,7 @@
         ${page.map((d) => {
           const integ = d.evaluation?.integrity?.level || 'High';
           return `<tr data-id="${d.id}">
-            <td><div class="td-cand"><div class="av" style="background:${avColor(d.candidate.fullName)}">${initials(d.candidate.fullName)}</div><div><b>${esc(d.candidate.fullName)}${d.videoIntro && d.videoIntro.file ? ` <span class="vid-chip" title="Has intro video">${I('mic', 10)}</span>` : ''}</b><span>${esc(d.candidate.email)}</span></div></div></td>
+            <td><div class="td-cand"><div class="av" style="background:${avColor(d.candidate.fullName)}">${initials(d.candidate.fullName)}</div><div><b>${esc(d.candidate.fullName)}${d.videoIntro && d.videoIntro.file ? ` <span class="vid-chip" title="Has interview recording">${I('camera', 10)}</span>` : ''}</b><span>${esc(d.candidate.email)}</span></div></div></td>
             <td>${esc(d.roleTitle)}<br><span style="font-size:12px;color:var(--muted)">${esc(B.CATEGORIES[d.category]?.label || '')}</span></td>
             <td>${scorePill(d.evaluation?.overall || 0)}${d.evaluation?.ai ? ' <span class="ai-tag">AI</span>' : ''}</td>
             <td>${recBadge(d.evaluation?.recommendation || '-')}</td>
@@ -563,7 +563,7 @@
           <button class="btn btn-outline btn-sm" id="backBtn">${I('left', 14)} Back</button>
         </div>
         <div class="actions">
-          ${d.videoIntro && d.videoIntro.file ? `<button class="btn btn-outline btn-sm" id="playVid">${I('mic', 15)} Watch intro</button>` : ''}
+          ${d.videoIntro && d.videoIntro.file ? `<button class="btn btn-outline btn-sm" id="playVid">${I('camera', 15)} Watch recording</button>` : ''}
           ${Store.serverInfo?.ai ? `<button class="btn btn-outline btn-sm" id="aiBtn">${I('brain', 15)} ${ev.ai ? 'Re-run AI' : 'Run Claude AI'}</button>` : ''}
           ${d.resume ? `<button class="btn btn-outline btn-sm" id="dlResume">${I('download', 15)} Resume</button>` : ''}
           <button class="btn btn-outline btn-sm" id="menuBtn2">${I('settings', 15)}</button>
@@ -658,7 +658,7 @@
             <div class="info-row"><span>Last employer</span><span>${esc(d.candidate.employer || '-')}</span></div>
             <div class="info-row"><span>City</span><span>${esc(d.candidate.city || '-')}</span></div>
             <div class="info-row"><span>Resume</span><span>${d.resume ? esc(d.resume.name) : '<span style="color:var(--muted)">None</span>'}</span></div>
-            <div class="info-row"><span>Intro video</span><span>${d.videoIntro && d.videoIntro.file ? `<a href="#" id="playVideoLink" style="color:var(--brand-dark);font-weight:600">▶ ${d.videoIntro.duration || 0}s</a>` : '<span style="color:var(--muted)">Skipped</span>'}</span></div>
+            <div class="info-row"><span>Interview recording</span><span>${d.videoIntro && d.videoIntro.file ? `<a href="#" id="playVideoLink" style="color:var(--brand-dark);font-weight:600">▶ ${d.videoIntro.duration || 0}s</a>` : '<span style="color:var(--muted)">Not available</span>'}</span></div>
             <div class="info-row"><span>Integrity</span><span>${ev.integrity?.level || 'High'}</span></div>
             <div class="info-row"><span>Tab switches</span><span>${ev.integrity?.tabSwitches || 0}</span></div>
             <div class="info-row"><span>Paste attempts</span><span>${ev.integrity?.pasteAttempts || 0}</span></div>
@@ -791,9 +791,9 @@
   function openVideoModal(d) {
     const url = 'api/video/' + encodeURIComponent(d.id);
     let token = null; try { token = sessionStorage.getItem('dvago_admin_token'); } catch (e) {}
-    modal(`<div class="m-head"><div class="m-ico brand">${I('mic', 20)}</div><div><h3>${esc(d.candidate.fullName)}'s intro video</h3><p>${d.videoIntro.duration || 0} seconds · ${Math.round((d.videoIntro.size || 0) / 1024)} KB</p></div></div>
+    modal(`<div class="m-head"><div class="m-ico brand">${I('camera', 20)}</div><div><h3>${esc(d.candidate.fullName)}'s interview recording</h3><p>${d.videoIntro.duration || 0} seconds · ${Math.round((d.videoIntro.size || 0) / 1024)} KB</p></div></div>
       <div class="m-body" style="padding:0 4px"><video id="introVideo" controls autoplay playsinline style="width:100%;border-radius:12px;background:#0a1a0c;max-height:480px"></video></div>
-      <div class="m-foot"><button class="btn btn-outline" data-dismiss>Close</button><a class="btn btn-outline" id="dlVid" download="${esc(d.candidate.fullName)}-intro.webm">${I('download', 14)} Download</a></div>`, 'wide');
+      <div class="m-foot"><button class="btn btn-outline" data-dismiss>Close</button><a class="btn btn-outline" id="dlVid" download="${esc(d.candidate.fullName)}-interview.webm">${I('download', 14)} Download</a></div>`, 'wide');
     const v = $('#introVideo');
     fetch(url, { headers: token ? { Authorization: 'Bearer ' + token } : {} })
       .then((r) => r.ok ? r.blob() : Promise.reject())
