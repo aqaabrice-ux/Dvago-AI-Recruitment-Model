@@ -187,7 +187,7 @@
   // The candidate's camera turns on right after the profile/resume step and stays on
   // (shown as a small, draggable live preview) for the whole interview. The feed is
   // recorded at a low bitrate and uploaded with the submission so HR can review it.
-  const REC_BITRATE = 120000; // ~120 kbps keeps a long session well under the 60 MB upload cap
+  const REC_BITRATE = 60000; // ~60 kbps: a 40-minute session is ~18 MB, keeping server storage small
   const Cam = {
     stream: null, pip: null, rec: null, chunks: [], recMime: '', startedAt: 0,
     supported() { return !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia); },
@@ -634,6 +634,33 @@
     });
   }
 
+  // Real-time check: does the uploaded resume look relevant to the given role (and position JD)?
+  // Returns { score 0-100, level: 'strong'|'moderate'|'weak', matched[], roleTitle } or null.
+  function resumeRelevance(roleKey, jdText) {
+    const r = S.resume;
+    if (!r || !r.text || !r.text.trim()) return null;
+    const roleDef = B.ROLES[roleKey];
+    if (!roleDef) return null;
+    const low = r.text.toLowerCase();
+    const pool = roleDef.skills || [];
+    const matched = pool.filter((s) => low.includes(String(s).toLowerCase()));
+    const need = Math.max(3, Math.round(pool.length * 0.3));
+    const skillScore = Math.min(1, matched.length / need);
+    // Position JD keyword overlap (only when a JD is available)
+    let jdScore = skillScore;
+    if (jdText && jdText.trim()) {
+      const STOP = new Set('the and for with you are will that this your our job role dvago pakistan description responsibilities requirements about have from into must should able who what when candidate team work experience years based full time position apply ability strong good excellent able'.split(' '));
+      const jdWords = Array.from(new Set((jdText.toLowerCase().match(/[a-z][a-z+&-]{3,}/g) || []).filter((w) => !STOP.has(w))));
+      if (jdWords.length) {
+        const jdMatched = jdWords.filter((w) => low.includes(w));
+        jdScore = Math.min(1, jdMatched.length / Math.max(6, Math.round(jdWords.length * 0.18)));
+      }
+    }
+    const score = Math.round(100 * (0.65 * skillScore + 0.35 * jdScore));
+    const level = score >= 50 ? 'strong' : score >= 25 ? 'moderate' : 'weak';
+    return { score, level, matched, roleTitle: roleDef.title };
+  }
+
   function drawResume() {
     const box = $('#resumeBox');
     const ins = $('#insBox');
@@ -655,7 +682,10 @@
     $('#rmResume').addEventListener('click', () => { S.resume = null; save(); drawResume(); });
     if (r.insights) {
       const a = r.insights;
+      const rel = a.relevance;
+      const relText = rel ? (rel.level === 'weak' ? `May not match the ${esc(rel.roleTitle)} role` : rel.level === 'moderate' ? `Partial match for ${esc(rel.roleTitle)}` : `Good match for ${esc(rel.roleTitle)}`) : '';
       ins.innerHTML = `<div class="insights"><h4>${I('sparkles', 14)} SARAH resume insights</h4>
+        ${rel ? `<div class="rel-badge rel-${rel.level}">${I(rel.level === 'weak' ? 'alert' : 'check', 14)} <span>${relText}</span></div>` : ''}
         ${a.years != null ? `<div class="ins-row"><span>Experience detected</span><b>${a.years} yr${a.years === 1 ? '' : 's'}</b></div>` : ''}
         ${a.education ? `<div class="ins-row"><span>Education</span><b>${esc(a.education)}</b></div>` : ''}
         <div class="ins-row"><span>Contact found</span><b>${a.email || a.phone ? 'Yes' : 'No'}</b></div>
@@ -742,6 +772,9 @@
       for (const p of empPatterns) { const m = text.match(p); if (m) { employer = m[1].trim(); break; } }
       if (employer) a.employerMatched = employer;
 
+      // Real-time relevance check against the role (known for invited candidates / pre-picked roles).
+      const rel = S.role ? resumeRelevance(S.role) : null;
+      if (rel) a.relevance = rel;
       S.resume.insights = a;
 
       const fill = (id, v) => { const el = $('#' + id); if (el && v && !el.value.trim()) { el.value = v; el.classList.add('autofilled'); return true; } return false; };
@@ -762,7 +795,16 @@
         fill('employer', employer)
       ];
       const filled = results.filter(Boolean).length;
-      if (bub) say(filled ? `Done! I filled in ${filled} field${filled > 1 ? 's' : ''} from your resume — highlighted in gold. Please double-check them before continuing.` : 'Done! I have read your resume. Please complete your details below.', $('.orb'), bub);
+      const filledNote = filled ? `Done! I filled in ${filled} field${filled > 1 ? 's' : ''} from your resume — highlighted in gold.` : 'Done! I have read your resume.';
+      let msg;
+      if (rel && rel.level === 'weak') {
+        msg = `${filledNote} One honest note — your experience does not seem directly relevant to the ${rel.roleTitle} position. You are welcome to continue; a DVAGO recruiter reviews every application carefully.`;
+      } else if (rel && rel.level !== 'weak') {
+        msg = `${filledNote} Your background looks relevant to the ${rel.roleTitle} role. Please double-check your details before continuing.`;
+      } else {
+        msg = filled ? `${filledNote} Please double-check them before continuing.` : `${filledNote} Please complete your details below.`;
+      }
+      if (bub) say(msg, $('.orb'), bub);
       ['fullName', 'email', 'phone', 'city', 'education', 'experience', 'employer'].forEach((k) => { const el = $('#' + k); if (el) S.candidate[k] = el.value.trim(); });
     } else if (bub) {
       UI.typeText(bub, 'Your resume is attached. I could not read its text automatically, so please fill in your details.', 18);
@@ -867,6 +909,9 @@
     if (!p) return go('position');
     const r = role();
     const jd = String(p.jd || '').trim();
+    // Real-time relevance of the uploaded resume to this specific position (role + JD now both known).
+    const rel = (S.resume && S.resume.text) ? resumeRelevance(S.role, jd) : null;
+    if (rel && S.resume && S.resume.insights) S.resume.insights.relevance = rel;
     // Split on double newlines (sections), or on a heading-like line followed by content
     const sections = jd.split(/\n\s*\n/).map((s) => s.trim()).filter(Boolean);
     const renderSection = (s) => {
@@ -897,12 +942,16 @@
         <span class="eyebrow">Step 3 · Job description</span>
         <h2 class="h2" style="margin-top:10px">${esc(p.title)}</h2>
         <p class="muted" style="margin-top:4px">${esc(r.title)} · ${esc(B.CATEGORIES[r.category].label)} · DVAGO Pakistan</p>
+        ${rel && rel.level === 'weak' ? `<div class="rel-warn">${I('alert', 18)}<div><b>Your experience may not match this position</b><span>Based on your resume, your background does not seem directly relevant to the ${esc(p.title)} role. You can still continue — a DVAGO recruiter reviews every application carefully.</span></div></div>` : ''}
         <div class="jd-doc">${sections.map(renderSection).join('')}</div>
         <div class="row-end"><button class="btn btn-ghost" id="back">${I('left', 16)} Change position</button><button class="btn btn-primary btn-lg btn-shine" id="go">I'm ready — begin interview ${I('right', 18)}</button></div>
       </section>
     </div>`);
     const orb = $('.orb');
-    say(`Here is the job description for the ${p.title} position. Your interview today will be tailored to this role. When you are ready, click to begin.`, orb, $('#bub'));
+    const jdSay = rel && rel.level === 'weak'
+      ? `Here is the job description for the ${p.title} position. I should mention — based on your resume, your experience does not look directly relevant to this role. You are welcome to continue; our recruiters review every application. When you are ready, click to begin.`
+      : `Here is the job description for the ${p.title} position. Your interview today will be tailored to this role. When you are ready, click to begin.`;
+    say(jdSay, orb, $('#bub'));
     $('#back').addEventListener('click', () => go('position'));
     $('#go').addEventListener('click', () => go('syscheck'));
   }
