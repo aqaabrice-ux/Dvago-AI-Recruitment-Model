@@ -15,6 +15,10 @@
   const PDFJS_WORKER_CDN = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
   const MAMMOTH_CDN = 'https://cdnjs.cloudflare.com/ajax/libs/mammoth/1.6.0/mammoth.browser.min.js';
   const ANSWER_LIMIT = 120;
+  // After the fixed (scored) voice questions SARAH asks a few personalised deep-dive questions. They are NOT scored,
+  // so every candidate is still compared on the same core questions; recruiters see them separately.
+  const ADAPTIVE_COUNT = 2;
+  const ADAPTIVE_BACKUP = ['Tell me about a challenge you faced in your most recent role and how you handled it.', 'Which part of this position do you feel most confident about, and which part would you want support to learn?'];
   const GAME_SECONDS = 40;
 
   const CITIES = ['Karachi', 'Lahore', 'Multan', 'Hyderabad', 'Bahawalpur', 'Sahiwal', 'Kasur', 'Burewala', 'Vehari', 'Khanewal'];
@@ -1146,7 +1150,7 @@
     function progress() {
       const idx = S.voiceIdx;
       $$('#vProg i').forEach((b, k) => { b.className = k < idx ? 'done' : k === idx ? 'on' : ''; });
-      $('#vLabel').textContent = idx < qs.length ? `Question ${idx + 1} of ${qs.length}` : 'Complete';
+      $('#vLabel').textContent = idx < qs.length ? `Question ${idx + 1} of ${qs.length}` : (V.part === 'adaptive' ? `Final question ${V.adIdx + 1} of ${ADAPTIVE_COUNT}` : 'Complete');
       $('#vCount').textContent = idx < qs.length ? `${idx + 1} / ${qs.length}` : '';
     }
 
@@ -1161,6 +1165,7 @@
     }
 
     function entry() {
+      if (V.part === 'adaptive') return S.adaptive[V.adIdx];
       const e = S.voice[S.voiceIdx];
       if (V.part === 'followUp') return e.followUp;
       if (V.part === 'clarify') return e.clarify;
@@ -1338,7 +1343,7 @@
       const e = entry();
       e.answer = text; e.mode = mode; e.durationSec = Math.round(dur);
       if (engine) { e.stt = engine; if (engine === 'whisper' && browserText && browserText !== text) e.sttBrowser = browserText; }
-      if (audio) e.audio = { dataUrl: audio.dataUrl, mime: audio.mime, size: audio.size, duration: Math.round(dur) };
+      if (audio && V.part !== 'adaptive') e.audio = { dataUrl: audio.dataUrl, mime: audio.mime, size: audio.size, duration: Math.round(dur) };
       V.lastMe = addMsg('me', text, metaFor(e));
       save();
       next();
@@ -1379,11 +1384,15 @@
       S.voiceIdx++;
       save();
       progress();
-      if (S.voiceIdx >= qs.length) return finish(fu && fu.ack);
+      if (S.voiceIdx >= qs.length) return adaptiveStep(fu && fu.ack);
       begin((fu && fu.ack) || ACKS[S.voiceIdx % ACKS.length]);
     }
 
     async function next() {
+      if (V.part === 'adaptive') {
+        const ack = ACKS[(V.adIdx + 1) % ACKS.length];
+        return adaptiveDone() >= ADAPTIVE_COUNT ? finish(ack) : adaptiveStep(ack);
+      }
       const e = S.voice[S.voiceIdx];
       const q = qs[S.voiceIdx];
       // Reply to one of SARAH's follow-ups: she reacts naturally, then moves to the next main question.
@@ -1429,6 +1438,48 @@
       ask(V.part === 'main' ? qs[k].q : S.voice[k].followUp.q, prefix);
     }
 
+    // ---- Adaptive deep-dive questions (AI-written from resume + JD + answers; fixed backup if the AI is unavailable) ----
+    const adaptiveDone = () => (S.adaptive || []).filter((a) => a.answer).length;
+    async function aiAdaptive() {
+      const turns = [];
+      (S.voice || []).forEach((v) => {
+        if (v && v.answer) turns.push({ q: v.q, a: v.answer });
+        if (v && v.followUp && v.followUp.answer) turns.push({ q: v.followUp.q, a: v.followUp.answer });
+      });
+      (S.adaptive || []).filter((a) => a.answer).forEach((a) => turns.push({ q: a.q, a: a.answer }));
+      const ctl = typeof AbortController === 'function' ? new AbortController() : null;
+      const timer = setTimeout(() => ctl && ctl.abort(), 12000);
+      try {
+        const res = await fetch('api/sarah-adaptive', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' }, signal: ctl ? ctl.signal : undefined,
+          body: JSON.stringify({ roleTitle: role().title, positionTitle: S.position ? S.position.title : '', jd: S.position ? S.position.jd : '', resumeText: S.resume && S.resume.text ? S.resume.text : '', turns, asked: (S.adaptive || []).map((a) => a.q) })
+        });
+        if (!res.ok) return null;
+        const d = await res.json();
+        return d && d.ok && d.q ? { q: d.q, why: d.why || '', source: 'ai' } : null;
+      } catch (e) { return null; } finally { clearTimeout(timer); }
+    }
+    async function adaptiveStep(prefix) {
+      if (!Array.isArray(S.adaptive)) S.adaptive = [];
+      if (adaptiveDone() >= ADAPTIVE_COUNT) return finish(prefix);
+      let idx = S.adaptive.findIndex((a) => !a.answer);
+      if (idx < 0) {
+        setPhase('speaking');
+        V.ctl.innerHTML = '<div class="mic-hint">SARAH is thinking…</div>';
+        orbState(V.orb, 'thinking');
+        let item = await aiAdaptive();
+        if (!V.alive) return;
+        if (!item) item = { q: ADAPTIVE_BACKUP[S.adaptive.length % ADAPTIVE_BACKUP.length], why: 'Standard backup question (AI was unavailable).', source: 'backup' };
+        S.adaptive.push(Object.assign({ answer: '', mode: null, durationSec: 0 }, item));
+        idx = S.adaptive.length - 1;
+        save();
+      }
+      V.part = 'adaptive'; V.adIdx = idx;
+      progress();
+      const lead = [prefix, idx === 0 ? 'I have two quick questions about your background.' : ''].filter(Boolean).join(' ');
+      ask(S.adaptive[idx].q, lead);
+    }
+
     async function finish(ack) {
       setPhase('speaking');
       const m = addMsg('SARAH', '');
@@ -1436,8 +1487,11 @@
       if (V.alive) setTimeout(() => go('brief'), 600);
     }
 
+    // rebuild answered deep-dive turns after a refresh
+    (S.adaptive || []).forEach((a) => { if (a.answer) { addMsg('SARAH', a.q); addMsg('me', a.answer, metaFor(a)); } });
+
     progress();
-    if (S.voiceIdx >= qs.length) return finish();
+    if (S.voiceIdx >= qs.length) return adaptiveStep('');
     begin(S.voiceIdx === 0 ? `Let's begin, ${first() || 'and relax'}.` : '');
   }
 
@@ -1879,6 +1933,7 @@
           audio: v.audio && v.audio.dataUrl ? { dataUrl: v.audio.dataUrl, mime: v.audio.mime, size: v.audio.size, duration: v.audio.duration } : null,
           followUp: v.followUp || null
         })),
+        adaptive: (S.adaptive || []).map((a) => ({ q: a.q, why: a.why, source: a.source, answer: a.answer, mode: a.mode, durationSec: a.durationSec })),
         voiceLang: S.voiceLang, answers: S.answers, integrity: S.integrity,
         timings: { assessmentSeconds: Math.round((new Date(S.exam.completedAt || now) - new Date(S.exam.startedAt)) / 1000), totalSeconds: Math.round((now - new Date(S.createdAt)) / 1000) },
         stage: 'New', notes: '', rating: 0, userAgent: navigator.userAgent
