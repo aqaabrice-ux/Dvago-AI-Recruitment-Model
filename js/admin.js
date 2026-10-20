@@ -728,7 +728,8 @@
           ${v.followUp ? `<div class="q" style="margin-top:10px"><b style="color:var(--brand-dark)">Follow-up:</b> ${esc(v.followUp.q)}</div><div class="a ${v.followUp.mode === 'voice' ? 'voice' : ''}">${esc(v.followUp.answer) || '<em>No answer</em>'}</div>` : ''}
           <div class="meta"><span>${I('clock', 11)}${v.durationSec || 0}s</span><span>${(v.answer || '').split(/\s+/).filter(Boolean).length} words</span>${vi.wpm ? `<span>${vi.wpm} wpm</span>` : ''}${vi.fillers != null ? `<span>${vi.fillers} fillers</span>` : ''}</div>
         </div>`;
-      }).join('') || '<p class="muted" style="text-align:center;padding:20px">No voice answers</p>'}</div>`;
+      }).join('') || '<p class="muted" style="text-align:center;padding:20px">No voice answers</p>'}</div>`
+        + ((d.adaptive || []).length ? `<h4 style="margin:22px 0 4px">${I('sparkles', 14)} SARAH deep-dive questions <span class="muted" style="font-weight:400;font-size:12px">· personalised, not scored</span></h4><div class="ans-list">${d.adaptive.map((a, k) => `<div class="ans"><div class="ans-head"><b>Deep-dive ${k + 1} · ${a.mode === 'voice' ? 'Voice' : 'Typed'}</b><span class="badge ${a.source === 'ai' ? 'b-good' : 'b-warn'}">${a.source === 'ai' ? 'AI-written' : 'Backup question'}</span></div><div class="q">${esc(a.q)}</div>${a.why ? `<div class="muted" style="font-size:12px;margin:2px 0 6px">Why asked: ${esc(a.why)}</div>` : ''}<div class="a ${a.mode === 'voice' ? 'voice' : ''}">${esc(a.answer) || '<em style="color:var(--muted)">No answer</em>'}</div></div>`).join('')}</div>` : '');
       // Lazy-load audio via admin auth
       let tok = null; try { tok = sessionStorage.getItem('dvago_admin_token'); } catch (e) {}
       $$('button[data-aud]', body).forEach((btn) => {
