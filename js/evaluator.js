@@ -99,7 +99,13 @@
       if (yrs.length >= 2) years = clamp(Math.max(...yrs) - Math.min(...yrs), 0, 40);
     }
     let edu = null;
-    for (const e of EDU_LEVELS) if (hitAny(t, e.k)) { edu = e; break; }
+    // Whole-word match; very short abbreviations (CA, BS, FA, MS, BE) are too ambiguous in lower case.
+    const eduHit = (k) => {
+      const kk = k.trim();
+      if (kk.length <= 2) return false;
+      return new RegExp('(^|[^a-z0-9])' + kk.toLowerCase().replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '(?![a-z0-9])').test(t);
+    };
+    for (const e of EDU_LEVELS) if (e.k.some(eduHit)) { edu = e; break; }
     let name = '';
     const NOT_NAME = /\b(resume|curriculum|vitae|cv|analyst|manager|engineer|developer|designer|officer|executive|assistant|pharmacist|accountant|administrator|supervisor|specialist|consultant|intern|director|coordinator|technician|profile|summary|objective|contact|experience|education|skills|projects|data|science|software|marketing|sales|finance|banking|business|pharmacy|store|cashier|clerk|teacher|nurse|doctor|about|me|references|declaration|personal|details|information|career|work)\b/i;
     const lines = raw.split(/\r?\n/).map((l) => l.trim()).filter(Boolean).slice(0, 15);
@@ -117,7 +123,10 @@
       }
     }
     const skillPool = role ? role.skills : [];
-    const matched = skillPool.filter((s) => t.includes(s.toLowerCase()));
+    const matched = skillPool.filter((s) => {
+      const k = s.toLowerCase();
+      return k.length > 4 ? t.includes(k) : new RegExp('(^|[^a-z0-9])' + k.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '(?![a-z0-9])').test(t);
+    });
     const missing = skillPool.filter((s) => !matched.includes(s)).slice(0, 6);
     return { name, email, phone, years, education: edu ? edu.label : null, eduLevel: edu ? edu.v : 0, skillsMatched: matched, skillsMissing: missing, words: words(raw).length };
   }
