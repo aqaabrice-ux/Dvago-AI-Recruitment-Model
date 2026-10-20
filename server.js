@@ -140,6 +140,16 @@ function readBody(req) {
 const pick = (o, keys) => Object.fromEntries(keys.filter((k) => o[k] !== undefined).map((k) => [k, o[k]]));
 const settings = () => Object.assign({}, DEFAULT_SETTINGS, db.settings);
 const listSubs = () => Object.values(db.submissions).map((s) => { const c = Object.assign({}, s); if (c.resume) c.resume = pick(c.resume, ['name', 'type', 'size', 'file']); return c; }).sort((a, b) => (b.completedAt || '').localeCompare(a.completedAt || ''));
+// Round-2 review record (admin-only): whitelist + clamp every field so a bad PATCH can't store junk.
+function cleanRound2(r) {
+  if (!r || typeof r !== 'object') return null;
+  const s = (v, n) => String(v == null ? '' : v).slice(0, n);
+  const iso = (v) => { const t = new Date(v); return isNaN(t) ? null : t.toISOString(); };
+  const out = { status: ['approved', 'slot-set'].includes(r.status) ? r.status : 'approved', approvedBy: s(r.approvedBy, 80), approvedAt: iso(r.approvedAt), interviewer: s(r.interviewer, 160), note: s(r.note, 500) };
+  if (r.slot && iso(r.slot.at)) out.slot = { at: iso(r.slot.at), durationMin: Math.min(240, Math.max(10, parseInt(r.slot.durationMin, 10) || 45)), label: s(r.slot.label, 80) };
+  out.history = (Array.isArray(r.history) ? r.history : []).slice(-50).map((h) => ({ at: iso(h && h.at), event: s(h && h.event, 60), by: s(h && h.by, 80) }));
+  return out;
+}
 const publicInvite = (i) => pick(i, ['token', 'name', 'email', 'role', 'status', 'expiresAt', 'schedule']);
 
 // Parse a data: URL. The mime part can itself contain ";" and "," (e.g. "video/webm;codecs=vp9,opus"),
@@ -1072,7 +1082,12 @@ async function api(req, res, url) {
     if (needAdmin()) return;
     if (r2 === 'ai-evaluate' && m === 'POST') { const s = await aiEvaluate(r1); return send(res, 200, s); }
     if (m === 'GET') return send(res, 200, sub);
-    if (m === 'PATCH') { Object.assign(sub, pick(await readBody(req), ['stage', 'notes', 'rating', 'tags'])); persist(); return send(res, 200, sub); }
+    if (m === 'PATCH') {
+      const b = await readBody(req);
+      Object.assign(sub, pick(b, ['stage', 'notes', 'rating', 'tags']));
+      if ('round2' in b) sub.round2 = cleanRound2(b.round2);
+      persist(); return send(res, 200, sub);
+    }
     if (m === 'DELETE') {
       if (sub.resume && sub.resume.file) { try { fs.unlinkSync(path.join(RESUMES, path.basename(sub.resume.file))); } catch (e) {} }
       if (sub.videoIntro && sub.videoIntro.file) { try { fs.unlinkSync(path.join(VIDEOS, path.basename(sub.videoIntro.file))); } catch (e) {} }
