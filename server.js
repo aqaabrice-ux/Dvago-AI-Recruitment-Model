@@ -179,6 +179,7 @@ function saveVoiceAudioFile(subId, questionId, audio) {
 // Cache of models that returned 404 so we don't keep hammering them
 const groqDeadModels = new Set();
 const resumeHits = new Map();
+const sttHits = new Map();
 let groqWorkingModel = null;
 let groqAvailableModels = null;
 
@@ -568,6 +569,46 @@ async function api(req, res, url) {
       console.warn('[groq] resume-check failed:', e.message);
       return send(res, 200, { ok: false, reason: 'ai-error' });
     }
+  }
+  // ---- Speech-to-text (candidate-public). Groq Whisper is far better than the browser recogniser for Urdu / accents.
+  // The browser keeps showing live captions; this returns the accurate final text. On any problem the client keeps the browser text.
+  if (r0 === 'transcribe' && m === 'POST') {
+    if (!groqEnabled()) return send(res, 200, { ok: false, reason: 'ai-not-configured' });
+    const ip = req.socket.remoteAddress || '?';
+    const now = Date.now();
+    const h = sttHits.get(ip) || { n: 0, t: now };
+    if (now - h.t > 60000) { h.n = 0; h.t = now; }
+    h.n++; sttHits.set(ip, h);
+    if (h.n > 40) return send(res, 200, { ok: false, reason: 'rate-limited' });
+    const b = await readBody(req);
+    const du = String(b.audio || '');
+    const mk = du.match(/^data:([^;,]+)(?:;[^,]*)?;base64,/);
+    if (!mk) return send(res, 200, { ok: false, reason: 'bad-audio' });
+    const buf = Buffer.from(du.slice(mk[0].length), 'base64');
+    if (buf.length < 2000 || buf.length > 20 * 1024 * 1024) return send(res, 200, { ok: false, reason: 'bad-size' });
+    const mime = mk[1];
+    const ext = /mp4|m4a|aac/i.test(mime) ? 'mp4' : /ogg/i.test(mime) ? 'ogg' : /wav/i.test(mime) ? 'wav' : 'webm';
+    const lang = /^en/i.test(String(b.lang || '')) ? 'en' : '';   // English forced; Urdu / mixed speech is auto-detected
+    const models = [process.env.WHISPER_MODEL, 'whisper-large-v3-turbo', 'whisper-large-v3'].filter((x, i, a) => x && a.indexOf(x) === i);
+    for (const model of models) {
+      try {
+        const fd = new FormData();
+        fd.append('file', new Blob([buf], { type: mime }), 'answer.' + ext);
+        fd.append('model', model);
+        fd.append('response_format', 'json');
+        fd.append('temperature', '0');
+        if (lang) fd.append('language', lang);
+        fd.append('prompt', 'Job interview for a pharmacy and retail company in Pakistan (DVAGO). The candidate may speak English, Urdu or Roman Urdu.');
+        const r = await fetch('https://api.groq.com/openai/v1/audio/transcriptions', { method: 'POST', headers: { Authorization: 'Bearer ' + process.env.GROQ_API_KEY }, body: fd });
+        if (r.status === 404 || r.status === 400) { console.warn('[stt] model unavailable:', model, r.status); continue; }
+        if (!r.ok) { console.warn('[stt] Groq', r.status); return send(res, 200, { ok: false, reason: r.status === 429 ? 'rate-limited' : 'ai-error' }); }
+        const d = await r.json();
+        const text = String(d.text || '').replace(/\s+/g, ' ').trim().slice(0, 4000);
+        console.log(`[stt] OK via ${model} (${Math.round(buf.length / 1024)} KB, ${text.split(' ').length} words)`);
+        return send(res, 200, { ok: true, text, model });
+      } catch (e) { console.warn('[stt] failed:', e.message); return send(res, 200, { ok: false, reason: 'ai-error' }); }
+    }
+    return send(res, 200, { ok: false, reason: 'no-model' });
   }
   // ---- SARAH neural voice (candidate-public). Text -> WAV via Groq Orpheus, cached on disk so repeats are instant/free ----
   if (r0 === 'tts' && m === 'POST') {
