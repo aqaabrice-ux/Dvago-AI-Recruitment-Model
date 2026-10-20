@@ -45,7 +45,7 @@
     return {
       v: 2, stage: 'splash', sessionId: Store.uid('S'), createdAt: new Date().toISOString(),
       inviteToken: null, invite: null, schedule: null,
-      candidate: { fullName: '', email: '', phone: '', cnic: '', city: '', education: '', experience: '', employer: '', linkedin: '' },
+      candidate: { fullName: '', email: '', phone: '', cnic: '', city: '', education: '', experience: '', employer: '', currentSalary: '', currentPerks: '', expectedSalary: '', linkedin: '' },
       consent: false, resume: null, role: null, position: null, voiceLang: 'en-US', voiceTyping: false,
       voice: [], voiceIdx: 0,
       answers: { sjt: {}, simulation: null, simulationTouched: false, case: {}, caseMode: {}, reasoning: {}, game: null },
@@ -615,7 +615,10 @@
           <div class="field"><label>City <i>*</i></label><select class="input" id="city">${opt(CITIES, c.city)}</select></div>
           <div class="field"><label>Highest education <i>*</i></label><select class="input" id="education">${opt(EDUCATION, c.education)}</select></div>
           <div class="field"><label>Total experience <i>*</i></label><select class="input" id="experience">${opt(EXPERIENCE, c.experience)}</select></div>
-          <div class="field"><label>Current / last employer</label><input class="input" id="employer" value="${esc(c.employer)}" placeholder="Company name"></div>
+          <div class="field"><label>Current / last company <i>*</i></label><input class="input" id="employer" value="${esc(c.employer)}" placeholder="Company name (write 'Fresher' if none)"></div>
+          <div class="field"><label>Current salary (PKR / month)</label><input class="input" id="currentSalary" inputmode="numeric" maxlength="9" value="${esc(c.currentSalary || '')}" placeholder="e.g. 45000 (leave blank if fresher)"></div>
+          <div class="field"><label>Other perks / benefits (if applicable)</label><input class="input" id="currentPerks" maxlength="200" value="${esc(c.currentPerks || '')}" placeholder="e.g. medical, fuel allowance, bonus"></div>
+          <div class="field"><label>Expected salary (PKR / month) <i>*</i></label><input class="input" id="expectedSalary" inputmode="numeric" maxlength="9" value="${esc(c.expectedSalary || '')}" placeholder="e.g. 60000"></div>
           <div class="field full"><label>LinkedIn profile</label><input class="input" id="linkedin" value="${esc(c.linkedin)}" placeholder="https://linkedin.com/in/…"></div>
           <label class="check field full"><input type="checkbox" id="consent" ${S.consent ? 'checked' : ''}><span>I agree that DVAGO may process my information and use AI-assisted evaluation for this recruitment. A human recruiter makes the final decision.</span></label>
         </div>
@@ -637,12 +640,13 @@
     $('#back').addEventListener('click', () => go('jd'));
     $$('.form-card .input').forEach((el) => el.addEventListener('input', () => { el.classList.remove('err', 'autofilled'); collect(); }));
     $('#consent').addEventListener('change', collect);
+    ['currentSalary', 'expectedSalary'].forEach((id) => $('#' + id).addEventListener('input', (e) => { e.target.value = e.target.value.replace(/\D/g, '').slice(0, 9); }));
     $('#cnic').addEventListener('input', (e) => {
       const d = e.target.value.replace(/\D/g, '').slice(0, 13);
       e.target.value = d.length > 12 ? `${d.slice(0, 5)}-${d.slice(5, 12)}-${d.slice(12)}` : d.length > 5 ? `${d.slice(0, 5)}-${d.slice(5)}` : d;
     });
     function collect() {
-      ['fullName', 'email', 'phone', 'cnic', 'city', 'education', 'experience', 'employer', 'linkedin'].forEach((k) => { S.candidate[k] = $('#' + k).value.trim(); });
+      ['fullName', 'email', 'phone', 'cnic', 'city', 'education', 'experience', 'employer', 'currentSalary', 'currentPerks', 'expectedSalary', 'linkedin'].forEach((k) => { const el = $('#' + k); if (el) S.candidate[k] = el.value.trim(); });
       S.consent = $('#consent').checked;
       saveSoon();
     }
@@ -654,9 +658,11 @@
       if (!isEmail(c2.email)) bad.push('email');
       if (c2.phone.replace(/\D/g, '').length < 10) bad.push('phone');
       ['city', 'education', 'experience'].forEach((k) => { if (!c2[k]) bad.push(k); });
+      if (c2.employer.length < 2) bad.push('employer');
+      if (!/^\d{3,9}$/.test(c2.expectedSalary || '')) bad.push('expectedSalary');
       bad.forEach((k) => $('#' + k).classList.add('err'));
       const perr = $('#perr');
-      if (bad.length) { perr.innerHTML = `<p class="err-msg">${I('alert', 16)} Please complete the highlighted fields (full name, valid email and phone).</p>`; return; }
+      if (bad.length) { perr.innerHTML = `<p class="err-msg">${I('alert', 16)} Please complete the highlighted fields (all fields marked * are required).</p>`; return; }
       if (!S.consent) { perr.innerHTML = `<p class="err-msg">${I('alert', 16)} Please accept the consent to continue.</p>`; return; }
       $('#go').disabled = true;
       try {
