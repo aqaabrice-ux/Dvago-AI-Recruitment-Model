@@ -1298,13 +1298,7 @@
       setPhase('speaking');
       V.ctl.innerHTML = `<div class="mic-hint">Processing your answer…</div>`;
       setTimeout(async () => {
-        const text = rec.text.trim();
-        if (!text) {
-          if (V.live) V.live.remove();
-          UI.toast("I couldn't catch that — please try again or type your answer.", 'error');
-          return setPhase('ready');
-        }
-        V.live.remove();
+        const browserText = rec.text.trim();
         let audioData = null;
         if (audioBlob && audioBlob.size) {
           try {
@@ -1313,13 +1307,37 @@
             });
           } catch (e) {}
         }
-        commit(text, 'voice', dur, audioData);
+        // Accurate final text from Whisper (server); falls back to the browser's live text when unavailable.
+        let text = browserText, engine = 'browser';
+        const wt = audioData && dur >= 1 ? await whisperText(audioData.dataUrl) : '';
+        if (wt && !(HALLUCINATION.test(wt) && browserText)) { text = wt; engine = 'whisper'; }
+        if (!text) {
+          if (V.live) V.live.remove();
+          UI.toast("I couldn't catch that — please try again or type your answer.", 'error');
+          return setPhase('ready');
+        }
+        if (V.live) V.live.remove();
+        commit(text, 'voice', dur, audioData, engine, browserText);
       }, 700);
     }
 
-    function commit(text, mode, dur, audio) {
+    // Whisper on the server: returns the transcript, or '' if unavailable / timed out (caller then uses the browser text).
+    const HALLUCINATION = /^\W*(thank you( so much)?( for watching)?|thanks for watching|you|bye)\W*$/i;
+    async function whisperText(dataUrl) {
+      const ctl = typeof AbortController === 'function' ? new AbortController() : null;
+      const timer = setTimeout(() => ctl && ctl.abort(), 25000);
+      try {
+        const res = await fetch('api/transcribe', { method: 'POST', headers: { 'Content-Type': 'application/json' }, signal: ctl ? ctl.signal : undefined, body: JSON.stringify({ audio: dataUrl, lang: S.voiceLang }) });
+        if (!res.ok) return '';
+        const d = await res.json();
+        return d && d.ok && d.text ? String(d.text).trim() : '';
+      } catch (e) { return ''; } finally { clearTimeout(timer); }
+    }
+
+    function commit(text, mode, dur, audio, engine, browserText) {
       const e = entry();
       e.answer = text; e.mode = mode; e.durationSec = Math.round(dur);
+      if (engine) { e.stt = engine; if (engine === 'whisper' && browserText && browserText !== text) e.sttBrowser = browserText; }
       if (audio) e.audio = { dataUrl: audio.dataUrl, mime: audio.mime, size: audio.size, duration: Math.round(dur) };
       V.lastMe = addMsg('me', text, metaFor(e));
       save();
