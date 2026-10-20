@@ -102,6 +102,7 @@
       { k: 'dashboard', ico: 'grid', label: 'Dashboard' },
       { k: 'candidates', ico: 'people', label: 'Candidates', cnt: n },
       { k: 'inbox', ico: 'bell', label: 'Inbox', cnt: newCount || null },
+      { k: 'review', ico: 'award', label: 'Review', cnt: pendingReviewCount() || null },
       { k: 'invites', ico: 'send', label: 'Invitations' },
       { k: 'analytics', ico: 'chart', label: 'Analytics' },
       { k: 'positions', ico: 'target', label: 'Positions & JDs' },
@@ -132,6 +133,7 @@
       dashboard: renderDashboard,
       candidates: renderCandidates,
       inbox: renderInbox,
+      review: renderReview,
       invites: renderInvites,
       analytics: renderAnalytics,
       positions: renderPositions,
@@ -642,6 +644,15 @@
               ${['New', 'Screening', 'Interview', 'Offer', 'Hired', 'Rejected'].map((s) => `<button class="stage-btn ${d.stage === s ? 'active' : ''}" data-s="${s}"><span class="st-dot"></span>${esc(s)}</button>`).join('')}
             </div>
           </div>
+          ${(isRecommended(d) || d.round2) ? `<div class="side-panel">
+            <h4>Next round</h4>
+            <div style="display:flex;flex-direction:column;gap:10px">
+              <div><span class="badge ${R2_STATUS[r2Status(d)].cls}">${esc(R2_STATUS[r2Status(d)].label)}</span></div>
+              ${d.round2 && d.round2.slot ? `<div style="font-size:13px">${I('clock', 13)} <b>${esc(slotLabel(d.round2.slot.at))}</b> · ${d.round2.slot.durationMin} min${d.round2.interviewer ? '<br><span style="color:var(--muted)">with ' + esc(d.round2.interviewer) + '</span>' : ''}</div>` : ''}
+              ${r2Status(d) === 'pending' ? `<button class="btn btn-primary btn-sm" id="r2Approve">${I('check', 14)} Approve</button>` : `<button class="btn ${r2Status(d) === 'approved' ? 'btn-primary' : 'btn-outline'} btn-sm" id="r2Invite">${I(r2Status(d) === 'approved' ? 'send' : 'clock', 14)} ${r2Status(d) === 'approved' ? 'Invite for next round' : 'Change slot'}</button>`}
+              ${d.round2 && d.round2.history && d.round2.history.length ? `<div style="font-size:12px;color:var(--muted);display:flex;flex-direction:column;gap:3px">${d.round2.history.slice().reverse().map((h) => `<span>${esc(h.event)} · ${esc(h.by || '')} · ${dtTime(h.at)}</span>`).join('')}</div>` : ''}
+            </div>
+          </div>` : ''}
           <div class="side-panel">
             <h4>Rating</h4>
             <div class="stars" id="stars">${[1, 2, 3, 4, 5].map((n) => `<button data-n="${n}" class="${(d.rating || 0) >= n ? 'on' : ''}" aria-label="${n} stars">${I('star', 22)}</button>`).join('')}</div>
@@ -687,6 +698,8 @@
       if (!r) return UI.toast('Resume unavailable', 'error');
       const a = document.createElement('a'); a.href = r.url; a.download = r.name; a.click();
     });
+    const r2a = $('#r2Approve'); if (r2a) r2a.addEventListener('click', async () => { await reviewAction('approve', d.id); renderDetail(); });
+    const r2i = $('#r2Invite'); if (r2i) r2i.addEventListener('click', () => openSlotModal(d));
     const pv = $('#playVideoLink'); if (pv) pv.addEventListener('click', (e) => { e.preventDefault(); openVideoModal(d); });
     const pv2 = $('#playVid'); if (pv2) pv2.addEventListener('click', () => openVideoModal(d));
     $$('.stage-btn').forEach((b) => b.addEventListener('click', async () => {
@@ -820,6 +833,153 @@
     view.innerHTML = `<div class="page-head"><div><h1>Inbox</h1><p>New candidates waiting for your review · ${newOnes.length} items</p></div></div>
       <div class="table-wrap">${renderMiniTable(newOnes)}</div>`;
     attachRowClicks();
+  }
+
+  // ---------- Review (recommended candidates -> Round 2) ----------
+  const R2_STATUS = {
+    pending: { label: 'Awaiting approval', cls: 'b-warn' },
+    approved: { label: 'Approved', cls: 'b-info' },
+    'slot-set': { label: 'Invite ready · email pending', cls: 'b-good' }
+  };
+  const isRecommended = (d) => ['Strong Hire', 'Hire'].includes(d.evaluation && d.evaluation.recommendation);
+  const r2Status = (d) => (d.round2 && d.round2.status) || 'pending';
+  const reviewList = () => data.filter((d) => isRecommended(d) || d.round2);
+  const pendingReviewCount = () => reviewList().filter((d) => r2Status(d) === 'pending').length;
+  const myName = () => { try { return localStorage.getItem('dvago_admin_name') || ''; } catch (e) { return ''; } };
+  const tzShort = () => new Date().getTimezoneOffset() === -300 ? 'PKT' : (new Intl.DateTimeFormat(undefined, { timeZoneName: 'short' }).formatToParts(new Date()).find((p) => p.type === 'timeZoneName') || {}).value || '';
+  const slotLabel = (at) => new Date(at).toLocaleString('en-GB', { weekday: 'short', day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit', hour12: true }) + ' (' + tzShort() + ')';
+
+  function renderReview() {
+    const all = reviewList();
+    const f = state.reviewFilter || 'all';
+    const items = all.filter((d) => f === 'all' || r2Status(d) === f).sort((a, b) => (b.evaluation?.overall || 0) - (a.evaluation?.overall || 0));
+    const cnt = (k) => all.filter((d) => r2Status(d) === k).length;
+    view.innerHTML = `
+      <div class="page-head">
+        <div><h1>Review</h1><p>Recommended candidates for leadership review · approve and invite them to the next round</p></div>
+        <div class="actions"><button class="btn btn-outline btn-sm" id="refreshBtn">${I('refresh', 15)} Refresh</button></div>
+      </div>
+      <div class="sec-tabs" id="rvTabs" style="margin-bottom:16px">
+        ${[['all', 'All', all.length], ['pending', 'Awaiting approval', cnt('pending')], ['approved', 'Approved', cnt('approved')], ['slot-set', 'Invite ready', cnt('slot-set')]].map(([k, l, n]) => `<button class="sec-tab ${f === k ? 'active' : ''}" data-f="${k}">${esc(l)} (${n})</button>`).join('')}
+      </div>
+      <div class="table-wrap">
+        ${items.length === 0 ? `<div class="empty"><div class="ei">${I('award', 24)}</div><h3>Nothing to review here</h3><p>Candidates recommended as "Hire" or "Strong Hire" will appear here for approval.</p></div>` : `
+        <table class="tbl"><thead><tr><th>Candidate</th><th>Role</th><th>Score</th><th>Recommendation</th><th>Expected salary</th><th>Status</th><th style="text-align:right">Action</th></tr></thead><tbody>
+          ${items.map((d) => {
+            const st = r2Status(d); const meta = R2_STATUS[st]; const r2 = d.round2 || {};
+            const act = st === 'pending'
+              ? `<button class="btn btn-primary btn-sm" data-act="approve" data-id="${d.id}">${I('check', 14)} Approve</button>`
+              : st === 'approved'
+                ? `<button class="btn btn-primary btn-sm" data-act="invite" data-id="${d.id}">${I('send', 14)} Invite for next round</button> <button class="btn btn-outline btn-sm" data-act="undo" data-id="${d.id}" title="Undo approval">${I('x', 14)}</button>`
+                : `<button class="btn btn-outline btn-sm" data-act="invite" data-id="${d.id}">${I('clock', 14)} Change slot</button>`;
+            return `<tr data-id="${d.id}" class="rv-row">
+              <td><div class="td-cand"><div class="av" style="background:${avColor(d.candidate.fullName)}">${initials(d.candidate.fullName)}</div><div><b>${esc(d.candidate.fullName)}</b><span>${esc(d.candidate.email)}</span></div></div></td>
+              <td>${esc(d.roleTitle)}</td>
+              <td>${scorePill(d.evaluation?.overall || 0)}</td>
+              <td>${recBadge(d.evaluation?.recommendation || '-')}</td>
+              <td>${d.candidate.expectedSalary ? 'PKR ' + Number(d.candidate.expectedSalary).toLocaleString() : '-'}</td>
+              <td><span class="badge ${meta.cls}">${esc(meta.label)}</span>${r2.slot ? `<div style="font-size:12px;color:var(--muted);margin-top:4px">${I('clock', 11)} ${esc(slotLabel(r2.slot.at))} · ${r2.slot.durationMin} min</div>` : ''}${r2.approvedBy && st !== 'pending' ? `<div style="font-size:12px;color:var(--muted)">by ${esc(r2.approvedBy)}</div>` : ''}</td>
+              <td style="text-align:right;white-space:nowrap">
+                <button class="btn btn-outline btn-sm" data-act="resume" data-id="${d.id}" ${d.resume ? '' : 'disabled title="No resume uploaded"'}>${I('download', 14)} Resume</button>
+                <button class="btn btn-outline btn-sm" data-act="view" data-id="${d.id}">${I('right', 14)} View</button>
+                ${act}
+              </td>
+            </tr>`;
+          }).join('')}
+        </tbody></table>`}
+      </div>`;
+    $$('#rvTabs .sec-tab').forEach((b) => b.addEventListener('click', () => { state.reviewFilter = b.dataset.f; renderReview(); }));
+    $('#refreshBtn').addEventListener('click', async () => { data = await Store.listSubmissions(); renderNav(); UI.toast('Refreshed', 'success'); renderReview(); });
+    $$('[data-act]').forEach((b) => b.addEventListener('click', (e) => { e.stopPropagation(); reviewAction(b.dataset.act, b.dataset.id); }));
+  }
+
+  async function saveRound2(d, patch, event) {
+    const prev = d.round2 || {};
+    const r2 = Object.assign({}, prev, patch);
+    r2.history = (prev.history || []).concat([{ at: new Date().toISOString(), event, by: r2.approvedBy || myName() || 'Admin' }]);
+    const body = { round2: r2 };
+    if (patch.status === 'slot-set') body.stage = 'Interview';
+    await Store.updateSubmission(d.id, body);
+    d.round2 = r2; if (body.stage) d.stage = body.stage;
+  }
+
+  async function reviewAction(act, id) {
+    const d = data.find((x) => x.id === id); if (!d) return;
+    if (act === 'view') { state.candidateId = id; return render(); }
+    if (act === 'resume') {
+      const r = await Store.getResume(d.id);
+      if (!r) return UI.toast('Resume unavailable', 'error');
+      const a = document.createElement('a'); a.href = r.url; a.download = r.name; a.click(); return;
+    }
+    if (act === 'approve') {
+      try { await saveRound2(d, { status: 'approved', approvedBy: myName() || 'Admin', approvedAt: new Date().toISOString() }, 'Approved'); }
+      catch (e) { return UI.toast('Could not save: ' + e.message, 'error'); }
+      UI.toast(d.candidate.fullName + ' approved', 'success'); renderNav(); return renderReview();
+    }
+    if (act === 'undo') {
+      try { await Store.updateSubmission(d.id, { round2: null }); } catch (e) { return UI.toast('Could not save: ' + e.message, 'error'); }
+      d.round2 = null; UI.toast('Approval undone', 'success'); renderNav(); return renderReview();
+    }
+    if (act === 'invite') return openSlotModal(d);
+  }
+
+  function openSlotModal(d) {
+    const r2 = d.round2 || {};
+    const cur = r2.slot ? new Date(r2.slot.at) : null;
+    const pad = (n) => String(n).padStart(2, '0');
+    const ymd = (x) => x.getFullYear() + '-' + pad(x.getMonth() + 1) + '-' + pad(x.getDate());
+    const days = []; const t = new Date();
+    while (days.length < 8) { t.setDate(t.getDate() + 1); if (t.getDay() !== 0 && t.getDay() !== 6) days.push(new Date(t)); }
+    const times = ['10:00', '11:00', '12:00', '14:00', '15:00', '16:00', '17:00'];
+    const fmt12 = (hm) => { const [h, m] = hm.split(':').map(Number); return (h % 12 || 12) + ':' + pad(m) + ' ' + (h >= 12 ? 'PM' : 'AM'); };
+    modal(`
+      <div class="m-head"><div class="m-ico brand">${I('send', 20)}</div><div><h3>Invite for next round</h3><p>${esc(d.candidate.fullName)} · ${esc(d.roleTitle)}</p></div></div>
+      <div class="m-body">
+        <div class="fld"><span>Pick a day</span>
+          <div class="slot-chips" id="sDays">${days.map((x) => `<button type="button" class="slot-chip" data-v="${ymd(x)}"><b>${x.toLocaleDateString('en-GB', { weekday: 'short' })}</b>${x.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })}</button>`).join('')}</div>
+          <label class="fld" style="margin-top:6px"><span style="font-weight:500;color:var(--muted)">or choose another date</span><input class="inp" id="sDate" type="date" min="${ymd(new Date())}"></label>
+        </div>
+        <div class="fld"><span>Pick a time (${esc(tzShort())})</span>
+          <div class="slot-chips" id="sTimes">${times.map((x) => `<button type="button" class="slot-chip" data-v="${x}">${fmt12(x)}</button>`).join('')}</div>
+          <label class="fld" style="margin-top:6px"><span style="font-weight:500;color:var(--muted)">or enter a custom time</span><input class="inp" id="sTime" type="time"></label>
+        </div>
+        <div class="fld"><span>Duration</span><select class="inp" id="sDur">${[30, 45, 60].map((n) => `<option value="${n}" ${(r2.slot ? r2.slot.durationMin : 45) === n ? 'selected' : ''}>${n} minutes</option>`).join('')}</select></div>
+        <label class="fld"><span>Interviewer(s)</span><input class="inp" id="sWho" placeholder="e.g. Abdul Hafeez, Head of HR" value="${esc(r2.interviewer || myName())}"></label>
+        <label class="fld"><span>Note for the candidate (optional)</span><textarea class="inp" id="sNote" placeholder="e.g. Please keep your CNIC and latest salary slip ready">${esc(r2.note || '')}</textarea></label>
+        <div class="slot-sum" id="sSum">Select a day and a time</div>
+      </div>
+      <div class="m-foot"><button class="btn btn-outline" data-dismiss>Cancel</button><button class="btn btn-primary" id="sGo">${I('check', 15)} Confirm slot</button></div>
+    `);
+    const dEl = $('#sDate'), tEl = $('#sTime');
+    if (cur) { dEl.value = ymd(cur); tEl.value = pad(cur.getHours()) + ':' + pad(cur.getMinutes()); }
+    const sync = () => {
+      $$('#sDays .slot-chip').forEach((b) => b.classList.toggle('on', b.dataset.v === dEl.value));
+      $$('#sTimes .slot-chip').forEach((b) => b.classList.toggle('on', b.dataset.v === tEl.value));
+      const sum = $('#sSum');
+      if (dEl.value && tEl.value) sum.innerHTML = `${I('clock', 14)} <b>${esc(slotLabel(new Date(dEl.value + 'T' + tEl.value + ':00')))}</b> · ${$('#sDur').value} min`;
+      else sum.textContent = 'Select a day and a time';
+    };
+    $$('#sDays .slot-chip').forEach((b) => b.addEventListener('click', () => { dEl.value = b.dataset.v; sync(); }));
+    $$('#sTimes .slot-chip').forEach((b) => b.addEventListener('click', () => { tEl.value = b.dataset.v; sync(); }));
+    [dEl, tEl, $('#sDur')].forEach((el) => el.addEventListener('input', sync));
+    sync();
+    $('#sGo').addEventListener('click', async () => {
+      if (!dEl.value || !tEl.value) return UI.toast('Please select a day and a time', 'error');
+      const start = new Date(dEl.value + 'T' + tEl.value + ':00');
+      if (isNaN(start) || start.getTime() < Date.now() + 5 * 60000) return UI.toast('Please pick a time in the future', 'error');
+      const dur = +$('#sDur').value;
+      const end = start.getTime() + dur * 60000;
+      const clash = data.find((x) => x.id !== d.id && x.round2 && x.round2.slot && start.getTime() < new Date(x.round2.slot.at).getTime() + x.round2.slot.durationMin * 60000 && end > new Date(x.round2.slot.at).getTime());
+      if (clash) return UI.toast(`That time overlaps with ${clash.candidate.fullName}'s interview (${slotLabel(clash.round2.slot.at)})`, 'error');
+      const who = $('#sWho').value.trim();
+      if (who) { try { localStorage.setItem('dvago_admin_name', who.split(',')[0].trim()); } catch (e) {} }
+      const btn = $('#sGo'); btn.disabled = true;
+      try {
+        await saveRound2(d, { status: 'slot-set', slot: { at: start.toISOString(), durationMin: dur, label: slotLabel(start) }, interviewer: who, note: $('#sNote').value.trim() }, r2.slot ? 'Slot changed' : 'Slot set');
+      } catch (e) { btn.disabled = false; return UI.toast('Could not save: ' + e.message, 'error'); }
+      closeModal(); UI.toast('Slot saved for ' + d.candidate.fullName, 'success'); renderNav();
+      if (state.candidateId) renderDetail(); else renderReview();
+    });
   }
 
   // ---------- Invites ----------
