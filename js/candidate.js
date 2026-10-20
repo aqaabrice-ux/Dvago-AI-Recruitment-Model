@@ -359,6 +359,23 @@
     }
   };
 
+  // If the resume looks like a weak match for the chosen position, ask once before moving on.
+  function confirmFit(next) {
+    const rel = S.resume && S.resume.insights && S.resume.insights.relevance;
+    const key = S.role + '|' + (S.position && S.position.id);
+    if (!rel || rel.level !== 'weak' || S._relAck === key) return next();
+    const title = (S.position && S.position.title) || rel.roleTitle || 'this position';
+    const why = rel.reason || 'Your resume does not seem to match the main requirements of this position.';
+    const m = modal(`<div class="m-ico">${I('alert', 30)}</div>
+      <h3 class="h3">Your resume may not match this position</h3>
+      <p><b>${esc(title)}</b></p>
+      <p>${esc(why)}</p>
+      <p>You can still continue with this interview, or go back and choose a position that fits your experience better. A DVAGO recruiter reviews every application.</p>
+      <div class="row" style="gap:10px;flex-wrap:wrap"><button class="btn btn-ghost btn-lg" id="fitBack">${I('left', 16)} Change position</button><button class="btn btn-primary btn-lg" id="fitGo">Continue anyway ${I('right', 16)}</button></div>`);
+    $('#fitBack', m).addEventListener('click', () => { closeModal(); go('role'); });
+    $('#fitGo', m).addEventListener('click', () => { S._relAck = key; save(); closeModal(); next(); });
+  }
+
   // Notify the candidate, turn the camera on, then continue to the next stage.
   function enableCameraThen(next) {
     if (Cam.active()) return next();
@@ -645,7 +662,8 @@
           return;
         }
       } catch (e) {}
-      enableCameraThen(() => go('syscheck'));
+      $('#go').disabled = false;
+      confirmFit(() => enableCameraThen(() => go('syscheck')));
     });
   }
 
@@ -721,9 +739,11 @@
     if (r.insights) {
       const a = r.insights;
       const rel = a.relevance;
+      const relReason = rel ? (rel.reason || (rel.level === 'weak' ? 'Few of the key skills for this role were found in your resume.' : '')) : '';
       const relText = rel ? (rel.level === 'weak' ? `May not match the ${esc(rel.roleTitle)} role` : rel.level === 'moderate' ? `Partial match for ${esc(rel.roleTitle)}` : `Good match for ${esc(rel.roleTitle)}`) : '';
       ins.innerHTML = `<div class="insights"><h4>${I('sparkles', 14)} SARAH resume insights</h4>
         ${rel ? `<div class="rel-badge rel-${rel.level}">${I(rel.level === 'weak' ? 'alert' : 'check', 14)} <span>${relText}</span></div>` : ''}
+        ${rel && relReason ? `<p class="rel-reason rel-reason-${rel.level}">${esc(relReason)}</p>` : ''}
         ${a.years != null ? `<div class="ins-row"><span>Experience detected</span><b>${a.years} yr${a.years === 1 ? '' : 's'}</b></div>` : ''}
         ${a.education ? `<div class="ins-row"><span>Education</span><b>${esc(a.education)}</b></div>` : ''}
         <div class="ins-row"><span>Contact found</span><b>${a.email || a.phone ? 'Yes' : 'No'}</b></div>
@@ -854,7 +874,7 @@
       const filledNote = filled ? `Done! I filled in ${filled} field${filled > 1 ? 's' : ''} from your resume — highlighted in gold.` : 'Done! I have read your resume.';
       let msg;
       if (rel && rel.level === 'weak') {
-        msg = `${filledNote} One honest note — your experience does not seem directly relevant to the ${rel.roleTitle} position. You are welcome to continue; a DVAGO recruiter reviews every application carefully.`;
+        msg = `${filledNote} One honest note — ${rel.reason || `your experience does not seem directly relevant to the ${rel.roleTitle} position.`} You are welcome to continue; a DVAGO recruiter reviews every application carefully.`;
       } else if (rel && rel.level !== 'weak') {
         msg = `${filledNote} Your background looks relevant to the ${rel.roleTitle} role. Please double-check your details before continuing.`;
       } else {
