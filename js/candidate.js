@@ -605,8 +605,12 @@
     say(S.resume ? 'Your resume is attached. Please double-check your details.' : "Let's get to know you. Upload your resume and I'll fill in the details for you.", orb, $('#bub'));
     // Role/position may have changed since the resume was uploaded — refresh its relevance.
     if (S.resume && S.resume.text && S.resume.insights && S.role) {
-      const rel = resumeRelevance(S.role, S.position && S.position.jd);
-      if (rel) S.resume.insights.relevance = rel;
+      const cur = S.resume.insights.relevance;
+      const stillValid = cur && cur.source === 'ai' && cur.role === S.role && cur.pos === (S.position && S.position.id);
+      if (!stillValid) {
+        const rel = resumeRelevance(S.role, S.position && S.position.jd);
+        if (rel) S.resume.insights.relevance = rel;
+      }
     }
     drawResume();
     $('#back').addEventListener('click', () => go('jd'));
@@ -643,6 +647,23 @@
       } catch (e) {}
       enableCameraThen(() => go('syscheck'));
     });
+  }
+
+  // Ask the server's AI to read the resume. Returns validated fields + fit, or null (not configured / offline / error / timeout).
+  async function aiResumeCheck(text) {
+    if (!S.role) return null;
+    const roleDef = B.ROLES[S.role];
+    const ctl = typeof AbortController === 'function' ? new AbortController() : null;
+    const timer = setTimeout(() => ctl && ctl.abort(), 14000);
+    try {
+      const res = await fetch('api/resume-check', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, signal: ctl ? ctl.signal : undefined,
+        body: JSON.stringify({ text: text.slice(0, 12000), roleTitle: roleDef ? roleDef.title : '', positionTitle: S.position ? S.position.title : '', jd: S.position ? S.position.jd : '' })
+      });
+      if (!res.ok) return null;
+      const d = await res.json();
+      return d && d.ok ? d : null;
+    } catch (e) { return null; } finally { clearTimeout(timer); }
   }
 
   // Skill match: short terms (pos, ca, sap…) must be whole words so "position"/"mechanical" don't match.
@@ -748,7 +769,7 @@
       a.skills = all.filter((s) => hasSkill(low, s));
 
       // Detect city (match against our city list)
-      const detectedCity = CITIES.find((c) => new RegExp('\\b' + c + '\\b', 'i').test(text));
+      let detectedCity = CITIES.find((c) => new RegExp('\\b' + c + '\\b', 'i').test(text));
       if (detectedCity) a.cityMatched = detectedCity;
 
       // Map detected education label to our dropdown values
@@ -792,9 +813,24 @@
       for (const p of empPatterns) { const m = text.match(p); if (m) { employer = m[1].trim(); break; } }
       if (employer) a.employerMatched = employer;
 
-      // Real-time relevance check against the role (known for invited candidates / pre-picked roles).
-      const rel = S.role ? resumeRelevance(S.role, S.position && S.position.jd) : null;
+      // Real-time relevance check. Rule-based first (instant, always available)...
+      let rel = S.role ? resumeRelevance(S.role, S.position && S.position.jd) : null;
       if (rel) a.relevance = rel;
+      // ...then the AI check on the server. If it is unavailable or fails, the rule-based results above are kept.
+      const ai = await aiResumeCheck(text);
+      if (ai) {
+        if (ai.name) a.name = ai.name;
+        if (ai.email && !a.email) a.email = ai.email;
+        if (ai.phone && !a.phone) a.phone = ai.phone;
+        if (ai.city) detectedCity = ai.city;
+        if (ai.education) detectedEdu = ai.education;
+        if (ai.experience) detectedExp = ai.experience;
+        if (ai.employer) employer = ai.employer;
+        if (ai.years != null) a.years = ai.years;
+        const roleDef = S.role && B.ROLES[S.role];
+        rel = { score: ai.fitScore, level: ai.fit, matched: (rel && rel.matched) || [], roleTitle: (S.position && S.position.title) || (roleDef && roleDef.title) || 'this', reason: ai.reason, source: 'ai', pos: S.position && S.position.id, role: S.role };
+        a.relevance = rel;
+      }
       S.resume.insights = a;
 
       const fill = (id, v) => { const el = $('#' + id); if (el && v && !el.value.trim()) { el.value = v; el.classList.add('autofilled'); return true; } return false; };
