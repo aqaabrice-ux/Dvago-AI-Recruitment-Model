@@ -645,6 +645,12 @@
     });
   }
 
+  // Skill match: short terms (pos, ca, sap…) must be whole words so "position"/"mechanical" don't match.
+  function hasSkill(low, s) {
+    if (s.length > 4) return low.includes(s);
+    return new RegExp('(^|[^a-z0-9])' + s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '(?![a-z0-9])').test(low);
+  }
+
   // Real-time check: does the uploaded resume look relevant to the given role (and position JD)?
   // Returns { score 0-100, level: 'strong'|'moderate'|'weak', matched[], roleTitle } or null.
   function resumeRelevance(roleKey, jdText) {
@@ -654,7 +660,7 @@
     if (!roleDef) return null;
     const low = r.text.toLowerCase();
     const pool = roleDef.skills || [];
-    const matched = pool.filter((s) => low.includes(String(s).toLowerCase()));
+    const matched = pool.filter((s) => hasSkill(low, String(s).toLowerCase()));
     const need = Math.max(3, Math.round(pool.length * 0.3));
     const skillScore = Math.min(1, matched.length / need);
     // Position JD keyword overlap (only when a JD is available)
@@ -739,7 +745,7 @@
       const a = DIA_EVAL.analyzeResume(text, S.role || 'front-staff');
       const all = Array.from(new Set(Object.values(B.ROLES).flatMap((r) => r.skills)));
       const low = text.toLowerCase();
-      a.skills = all.filter((s) => low.includes(s));
+      a.skills = all.filter((s) => hasSkill(low, s));
 
       // Detect city (match against our city list)
       const detectedCity = CITIES.find((c) => new RegExp('\\b' + c + '\\b', 'i').test(text));
@@ -748,15 +754,17 @@
       // Map detected education label to our dropdown values
       const eduMap = {
         'Pharm-D': ['Pharm-D', 'Pharm.D', 'PharmD', 'Doctor of Pharmacy'],
-        'ACCA / CA / CMA': ['ACCA', ' CA ', 'CA Finalist', 'Chartered Accountant', 'CMA', 'CFA'],
-        "Master's Degree": ['Master', 'MBA', 'M.Com', 'MSc', 'M.Sc', 'MPhil', ' MS ', 'MA '],
-        "Bachelor's Degree": ['Bachelor', 'BBA', 'B.Com', 'BSc', 'B.Sc', ' BS ', ' BE ', 'B.E', 'BCS', 'Graduate'],
-        'Intermediate / A-Levels': ['Intermediate', 'FSc', 'F.Sc', ' FA ', 'F.A', 'ICS', 'I.Com', 'A level', 'A-Level', 'HSSC'],
+        'ACCA / CA / CMA': ['ACCA', 'CA', 'CA Finalist', 'Chartered Accountant', 'CMA', 'CFA'],
+        "Master's Degree": ['Master', 'MBA', 'M.Com', 'MSc', 'M.Sc', 'MPhil'],
+        "Bachelor's Degree": ['Bachelor', 'BBA', 'B.Com', 'BSc', 'B.Sc', 'BS', 'B.E', 'BCS', 'Graduate'],
+        'Intermediate / A-Levels': ['Intermediate', 'FSc', 'F.Sc', 'FA', 'F.A', 'ICS', 'I.Com', 'A level', 'A-Level', 'HSSC'],
         'Matric / O-Levels': ['Matric', 'O level', 'O-Level', 'SSC']
       };
+      // Whole-word match; very short abbreviations (CA, BS, FA) must be written in capitals.
+      const eduHit = (k) => new RegExp('(^|[^A-Za-z0-9])' + k.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '(?![A-Za-z0-9])', k.length <= 2 ? '' : 'i').test(text);
       let detectedEdu = null;
       for (const [label, keys] of Object.entries(eduMap)) {
-        if (keys.some((k) => text.toLowerCase().includes(k.toLowerCase().trim()))) { detectedEdu = label; break; }
+        if (keys.some(eduHit)) { detectedEdu = label; break; }
       }
       if (detectedEdu) a.educationMatched = detectedEdu;
 
