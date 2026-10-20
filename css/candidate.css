@@ -464,6 +464,7 @@ textarea.input { height: auto; min-height: 120px; padding: 14px; resize: vertica
 
 /* ---------- Screenshot / copy deterrents ---------- */
 body.no-shot .screen, body.no-shot .exam-full, body.no-shot .topbar { -webkit-user-select: none; user-select: none; }
+body.no-shot input, body.no-shot textarea, body.no-shot select, body.no-shot [contenteditable] { -webkit-user-select: text; user-select: text; }
 .shot-shield { position: fixed; inset: 0; z-index: 9000; display: none; place-items: center; background: #0c160d; color: #fff; }
 .shot-shield.on { display: grid; }
 .shot-shield .ss-box { text-align: center; display: flex; flex-direction: column; align-items: center; gap: 10px; max-width: 360px; padding: 24px; }
