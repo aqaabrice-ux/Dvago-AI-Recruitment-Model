@@ -655,7 +655,10 @@
             <div class="info-row"><span>Phone</span><span>${esc(d.candidate.phone || '-')}</span></div>
             <div class="info-row"><span>Education</span><span>${esc(d.candidate.education || '-')}</span></div>
             <div class="info-row"><span>Experience</span><span>${esc(d.candidate.experience || '-')}</span></div>
-            <div class="info-row"><span>Last employer</span><span>${esc(d.candidate.employer || '-')}</span></div>
+            <div class="info-row"><span>Current / last company</span><span>${esc(d.candidate.employer || '-')}</span></div>
+            <div class="info-row"><span>Current salary</span><span>${d.candidate.currentSalary ? 'PKR ' + Number(d.candidate.currentSalary).toLocaleString() + ' / mo' : '-'}</span></div>
+            <div class="info-row"><span>Other perks</span><span style="text-align:right">${esc(d.candidate.currentPerks || '-')}</span></div>
+            <div class="info-row"><span>Expected salary</span><span><b>${d.candidate.expectedSalary ? 'PKR ' + Number(d.candidate.expectedSalary).toLocaleString() + ' / mo' : '-'}</b></span></div>
             <div class="info-row"><span>City</span><span>${esc(d.candidate.city || '-')}</span></div>
             <div class="info-row"><span>Resume</span><span>${d.resume ? esc(d.resume.name) : '<span style="color:var(--muted)">None</span>'}</span></div>
             <div class="info-row"><span>Interview recording</span><span>${d.videoIntro && d.videoIntro.file ? `<a href="#" id="playVideoLink" style="color:var(--brand-dark);font-weight:600">▶ ${d.videoIntro.duration || 0}s</a>` : '<span style="color:var(--muted)">Not available</span>'}</span></div>
@@ -1367,10 +1370,10 @@
 
   // ---------- Export CSV ----------
   function exportCSV() {
-    const rows = [['Name', 'Email', 'Phone', 'Role', 'Category', 'City', 'Education', 'Experience', 'Score', 'Recommendation', 'Stage', 'Submitted']];
+    const rows = [['Name', 'Email', 'Phone', 'Role', 'Category', 'City', 'Education', 'Experience', 'Current Company', 'Current Salary (PKR/mo)', 'Other Perks', 'Expected Salary (PKR/mo)', 'Score', 'Recommendation', 'Stage', 'Submitted']];
     data.forEach((d) => {
       const c = d.candidate;
-      rows.push([c.fullName, c.email, c.phone, d.roleTitle, B.CATEGORIES[d.category]?.label, c.city, c.education, c.experience, d.evaluation?.overall || 0, d.evaluation?.recommendation || '', d.stage || 'New', d.completedAt]);
+      rows.push([c.fullName, c.email, c.phone, d.roleTitle, B.CATEGORIES[d.category]?.label, c.city, c.education, c.experience, c.employer, c.currentSalary, c.currentPerks, c.expectedSalary, d.evaluation?.overall || 0, d.evaluation?.recommendation || '', d.stage || 'New', d.completedAt]);
     });
     const csv = rows.map((r) => r.map((v) => '"' + String(v || '').replace(/"/g, '""') + '"').join(',')).join('\n');
     const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv' })); a.download = 'dvago-candidates.csv'; a.click();
