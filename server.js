@@ -562,6 +562,7 @@ async function api(req, res, url) {
     if (resumeText.length < 40) return send(res, 200, { ok: false, reason: 'too-short' });
     try {
       const r = await groqResumeCheck({ resumeText, roleTitle: String(b.roleTitle || '').slice(0, 80), positionTitle: String(b.positionTitle || '').slice(0, 100), jd: String(b.jd || '') });
+      console.log(`[groq] resume-check OK -> ${r.fit} (${r.fitScore}) via ${r.model}`);
       return send(res, 200, Object.assign({ ok: true, source: 'ai' }, r));
     } catch (e) {
       console.warn('[groq] resume-check failed:', e.message);
