@@ -102,7 +102,7 @@
       { k: 'dashboard', ico: 'grid', label: 'Dashboard' },
       { k: 'candidates', ico: 'people', label: 'Candidates', cnt: n },
       { k: 'inbox', ico: 'bell', label: 'Inbox', cnt: newCount || null },
-      { k: 'review', ico: 'award', label: 'Review', cnt: pendingReviewCount() || null },
+      { k: 'review', ico: 'award', label: 'Recommended', cnt: pendingReviewCount() || null },
       { k: 'invites', ico: 'send', label: 'Invitations' },
       { k: 'analytics', ico: 'chart', label: 'Analytics' },
       { k: 'positions', ico: 'target', label: 'Positions & JDs' },
@@ -648,7 +648,8 @@
             <h4>Next round</h4>
             <div style="display:flex;flex-direction:column;gap:10px">
               <div><span class="badge ${R2_STATUS[r2Status(d)].cls}">${esc(R2_STATUS[r2Status(d)].label)}</span></div>
-              ${d.round2 && d.round2.slot ? `<div style="font-size:13px">${I('clock', 13)} <b>${esc(slotLabel(d.round2.slot.at))}</b> · ${d.round2.slot.durationMin} min${d.round2.interviewer ? '<br><span style="color:var(--muted)">with ' + esc(d.round2.interviewer) + '</span>' : ''}</div>` : ''}
+              ${d.round2 && d.round2.slot ? `<div style="font-size:13px">${I('clock', 13)} <b>${esc(slotLabel(d.round2.slot.at))}</b> · ${d.round2.slot.durationMin} min${d.round2.interviewer ? '<br><span style="color:var(--muted)">with ' + esc(d.round2.interviewer) + '</span>' : ''}<br><span style="color:var(--muted)">${d.round2.mode === 'onsite' ? 'On-site' : 'Online'}</span>${d.round2.meetLink ? ' · <a href="' + esc(d.round2.meetLink) + '" target="_blank" rel="noopener">Meet link</a>' : ''}</div>` : ''}
+              ${r2Status(d) === 'slot-set' ? `<button class="btn btn-primary btn-sm" id="r2Send">${I('send', 14)} ${d.round2.send && d.round2.send.state === 'failed' ? 'Retry email' : 'Send email'}</button>` : ''}
               ${r2Status(d) === 'pending' ? `<button class="btn btn-primary btn-sm" id="r2Approve">${I('check', 14)} Approve</button>` : `<button class="btn ${r2Status(d) === 'approved' ? 'btn-primary' : 'btn-outline'} btn-sm" id="r2Invite">${I(r2Status(d) === 'approved' ? 'send' : 'clock', 14)} ${r2Status(d) === 'approved' ? 'Invite for next round' : 'Change slot'}</button>`}
               ${d.round2 && d.round2.history && d.round2.history.length ? `<div style="font-size:12px;color:var(--muted);display:flex;flex-direction:column;gap:3px">${d.round2.history.slice().reverse().map((h) => `<span>${esc(h.event)} · ${esc(h.by || '')} · ${dtTime(h.at)}</span>`).join('')}</div>` : ''}
             </div>
@@ -699,6 +700,7 @@
       const a = document.createElement('a'); a.href = r.url; a.download = r.name; a.click();
     });
     const r2a = $('#r2Approve'); if (r2a) r2a.addEventListener('click', async () => { await reviewAction('approve', d.id); renderDetail(); });
+    const r2s = $('#r2Send'); if (r2s) r2s.addEventListener('click', () => openSendModal(d));
     const r2i = $('#r2Invite'); if (r2i) r2i.addEventListener('click', () => openSlotModal(d));
     const pv = $('#playVideoLink'); if (pv) pv.addEventListener('click', (e) => { e.preventDefault(); openVideoModal(d); });
     const pv2 = $('#playVid'); if (pv2) pv2.addEventListener('click', () => openVideoModal(d));
@@ -839,7 +841,8 @@
   const R2_STATUS = {
     pending: { label: 'Awaiting approval', cls: 'b-warn' },
     approved: { label: 'Approved', cls: 'b-info' },
-    'slot-set': { label: 'Invite ready · email pending', cls: 'b-good' }
+    'slot-set': { label: 'Invite ready', cls: 'b-good' },
+    sent: { label: 'Email sent', cls: 'b-good' }
   };
   const isRecommended = (d) => ['Strong Hire', 'Hire'].includes(d.evaluation && d.evaluation.recommendation);
   const r2Status = (d) => (d.round2 && d.round2.status) || 'pending';
@@ -856,11 +859,11 @@
     const cnt = (k) => all.filter((d) => r2Status(d) === k).length;
     view.innerHTML = `
       <div class="page-head">
-        <div><h1>Review</h1><p>Recommended candidates for leadership review · approve and invite them to the next round</p></div>
+        <div><h1>Recommended</h1><p>Recommended candidates for leadership review · approve, set the interview and email the invitation</p></div>
         <div class="actions"><button class="btn btn-outline btn-sm" id="refreshBtn">${I('refresh', 15)} Refresh</button></div>
       </div>
       <div class="sec-tabs" id="rvTabs" style="margin-bottom:16px">
-        ${[['all', 'All', all.length], ['pending', 'Awaiting approval', cnt('pending')], ['approved', 'Approved', cnt('approved')], ['slot-set', 'Invite ready', cnt('slot-set')]].map(([k, l, n]) => `<button class="sec-tab ${f === k ? 'active' : ''}" data-f="${k}">${esc(l)} (${n})</button>`).join('')}
+        ${[['all', 'All', all.length], ['pending', 'Awaiting approval', cnt('pending')], ['approved', 'Approved', cnt('approved')], ['slot-set', 'Invite ready', cnt('slot-set')], ['sent', 'Email sent', cnt('sent')]].map(([k, l, n]) => `<button class="sec-tab ${f === k ? 'active' : ''}" data-f="${k}">${esc(l)} (${n})</button>`).join('')}
       </div>
       <div class="table-wrap">
         ${items.length === 0 ? `<div class="empty"><div class="ei">${I('award', 24)}</div><h3>Nothing to review here</h3><p>Candidates recommended as "Hire" or "Strong Hire" will appear here for approval.</p></div>` : `
@@ -871,14 +874,16 @@
               ? `<button class="btn btn-primary btn-sm" data-act="approve" data-id="${d.id}">${I('check', 14)} Approve</button>`
               : st === 'approved'
                 ? `<button class="btn btn-primary btn-sm" data-act="invite" data-id="${d.id}">${I('send', 14)} Invite for next round</button> <button class="btn btn-outline btn-sm" data-act="undo" data-id="${d.id}" title="Undo approval">${I('x', 14)}</button>`
-                : `<button class="btn btn-outline btn-sm" data-act="invite" data-id="${d.id}">${I('clock', 14)} Change slot</button>`;
+                : st === 'slot-set'
+                  ? `<button class="btn btn-primary btn-sm" data-act="send" data-id="${d.id}">${I('send', 14)} ${r2.send && r2.send.state === 'failed' ? 'Retry email' : 'Send email'}</button> <button class="btn btn-outline btn-sm" data-act="invite" data-id="${d.id}">${I('clock', 14)} Change slot</button>`
+                  : `<button class="btn btn-outline btn-sm" data-act="invite" data-id="${d.id}">${I('clock', 14)} Change slot</button>`;
             return `<tr data-id="${d.id}" class="rv-row">
               <td><div class="td-cand"><div class="av" style="background:${avColor(d.candidate.fullName)}">${initials(d.candidate.fullName)}</div><div><b>${esc(d.candidate.fullName)}</b><span>${esc(d.candidate.email)}</span></div></div></td>
               <td>${esc(d.roleTitle)}</td>
               <td>${scorePill(d.evaluation?.overall || 0)}</td>
               <td>${recBadge(d.evaluation?.recommendation || '-')}</td>
               <td>${d.candidate.expectedSalary ? 'PKR ' + Number(d.candidate.expectedSalary).toLocaleString() : '-'}</td>
-              <td><span class="badge ${meta.cls}">${esc(meta.label)}</span>${r2.slot ? `<div style="font-size:12px;color:var(--muted);margin-top:4px">${I('clock', 11)} ${esc(slotLabel(r2.slot.at))} · ${r2.slot.durationMin} min</div>` : ''}${r2.approvedBy && st !== 'pending' ? `<div style="font-size:12px;color:var(--muted)">by ${esc(r2.approvedBy)}</div>` : ''}</td>
+              <td><span class="badge ${meta.cls}">${esc(meta.label)}</span>${r2.slot ? `<div style="font-size:12px;color:var(--muted);margin-top:4px">${I('clock', 11)} ${esc(slotLabel(r2.slot.at))} · ${r2.slot.durationMin} min · ${r2.mode === 'onsite' ? 'On-site' : 'Online'}</div>` : ''}${r2.meetLink ? `<div style="font-size:12px;margin-top:2px"><a href="${esc(r2.meetLink)}" target="_blank" rel="noopener">Meet link</a></div>` : ''}${r2.send && r2.send.state === 'failed' ? `<div style="font-size:12px;color:var(--bad,#c0392b);margin-top:2px" title="${esc(r2.send.error)}">${I('alert', 11)} Email failed</div>` : ''}${r2.approvedBy && st !== 'pending' ? `<div style="font-size:12px;color:var(--muted)">by ${esc(r2.approvedBy)}</div>` : ''}</td>
               <td style="text-align:right;white-space:nowrap">
                 <button class="btn btn-outline btn-sm" data-act="resume" data-id="${d.id}" ${d.resume ? '' : 'disabled title="No resume uploaded"'}>${I('download', 14)} Resume</button>
                 <button class="btn btn-outline btn-sm" data-act="view" data-id="${d.id}">${I('right', 14)} View</button>
@@ -921,6 +926,35 @@
       d.round2 = null; UI.toast('Approval undone', 'success'); renderNav(); return renderReview();
     }
     if (act === 'invite') return openSlotModal(d);
+    if (act === 'send') return openSendModal(d);
+  }
+
+  async function openSendModal(d) {
+    const r2 = d.round2 || {};
+    let em;
+    try { em = await Store.round2Email(d.id); } catch (e) { return UI.toast(e.message, 'error'); }
+    modal(`
+      <div class="m-head"><div class="m-ico brand">${I('send', 20)}</div><div><h3>Send invitation email</h3><p>${esc(d.candidate.fullName)} · ${esc(r2.mode === 'onsite' ? 'On-site' : 'Online (Google Meet)')}</p></div></div>
+      <div class="m-body">
+        ${em.configured ? '' : `<div class="slot-sum" style="background:var(--warn-bg,#fff4e0);color:var(--warn,#8a5a00)">${I('alert', 14)} Email sender is not connected yet (ROUND2_SCRIPT_URL / ROUND2_SCRIPT_KEY missing). You can preview, but sending will fail.</div>`}
+        <div style="font-size:13px;color:var(--muted)">From <b>${esc(em.sender)}</b> · To <b>${esc(em.to)}</b>${r2.mode === 'onsite' ? '' : ' · a Google Meet link is created automatically'}</div>
+        <div style="font-size:13px"><b>Subject:</b> ${esc(em.subject)}</div>
+        <div style="border:1px solid var(--line,#e3e6ee);border-radius:10px;padding:14px;max-height:320px;overflow:auto;background:#fff;color:#1a1f36">${em.html}</div>
+      </div>
+      <div class="m-foot"><button class="btn btn-outline" data-dismiss>Cancel</button><button class="btn btn-primary" id="sendGo">${I('send', 15)} Send now</button></div>
+    `);
+    $('#sendGo').addEventListener('click', async () => {
+      const btn = $('#sendGo'); btn.disabled = true; btn.textContent = 'Sending…';
+      try {
+        const sub = await Store.round2Send(d.id);
+        d.round2 = sub.round2;
+        closeModal(); UI.toast('Invitation emailed to ' + d.candidate.fullName, 'success');
+      } catch (e) {
+        UI.toast('Could not send: ' + e.message, 'error'); closeModal();
+        try { data = await Store.listSubmissions(); } catch (x) {}
+      }
+      renderNav(); if (state.candidateId) renderDetail(); else renderReview();
+    });
   }
 
   function openSlotModal(d) {
@@ -928,16 +962,24 @@
     const cur = r2.slot ? new Date(r2.slot.at) : null;
     const pad = (n) => String(n).padStart(2, '0');
     const ymd = (x) => x.getFullYear() + '-' + pad(x.getMonth() + 1) + '-' + pad(x.getDate());
-    const days = []; const t = new Date();
+    // Preparation window: nothing can be booked for today or tomorrow (e.g. on the 21st the earliest day is the 23rd).
+    const days = []; const t = new Date(); t.setDate(t.getDate() + 1);
+    const minDay = new Date(); minDay.setDate(minDay.getDate() + 2);
+    let mode = r2.mode === 'onsite' ? 'onsite' : 'online';
     while (days.length < 8) { t.setDate(t.getDate() + 1); if (t.getDay() !== 0 && t.getDay() !== 6) days.push(new Date(t)); }
     const times = ['10:00', '11:00', '12:00', '14:00', '15:00', '16:00', '17:00'];
     const fmt12 = (hm) => { const [h, m] = hm.split(':').map(Number); return (h % 12 || 12) + ':' + pad(m) + ' ' + (h >= 12 ? 'PM' : 'AM'); };
     modal(`
       <div class="m-head"><div class="m-ico brand">${I('send', 20)}</div><div><h3>Invite for next round</h3><p>${esc(d.candidate.fullName)} · ${esc(d.roleTitle)}</p></div></div>
       <div class="m-body">
+        <div class="fld"><span>Interview type</span>
+          <div class="slot-chips" id="sMode"><button type="button" class="slot-chip" data-m="online"><b>Online</b>Google Meet link</button><button type="button" class="slot-chip" data-m="onsite"><b>On-site</b>Venue details</button></div>
+        </div>
+        <div id="sVenue" class="slot-sum" style="display:none">${I('alert', 14)} The venue, address and whom to meet are added automatically from the email script.</div>
         <div class="fld"><span>Pick a day</span>
+          <small style="color:var(--muted);font-weight:400">Earliest bookable day is ${esc(minDay.toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'short' }))} (a 24-hour preparation window is kept free)</small>
           <div class="slot-chips" id="sDays">${days.map((x) => `<button type="button" class="slot-chip" data-v="${ymd(x)}"><b>${x.toLocaleDateString('en-GB', { weekday: 'short' })}</b>${x.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })}</button>`).join('')}</div>
-          <label class="fld" style="margin-top:6px"><span style="font-weight:500;color:var(--muted)">or choose another date</span><input class="inp" id="sDate" type="date" min="${ymd(new Date())}"></label>
+          <label class="fld" style="margin-top:6px"><span style="font-weight:500;color:var(--muted)">or choose another date</span><input class="inp" id="sDate" type="date" min="${ymd(minDay)}"></label>
         </div>
         <div class="fld"><span>Pick a time (${esc(tzShort())})</span>
           <div class="slot-chips" id="sTimes">${times.map((x) => `<button type="button" class="slot-chip" data-v="${x}">${fmt12(x)}</button>`).join('')}</div>
@@ -953,12 +995,15 @@
     const dEl = $('#sDate'), tEl = $('#sTime');
     if (cur) { dEl.value = ymd(cur); tEl.value = pad(cur.getHours()) + ':' + pad(cur.getMinutes()); }
     const sync = () => {
+      $$('#sMode .slot-chip').forEach((b) => b.classList.toggle('on', b.dataset.m === mode));
+      $('#sVenue').style.display = mode === 'onsite' ? 'block' : 'none';
       $$('#sDays .slot-chip').forEach((b) => b.classList.toggle('on', b.dataset.v === dEl.value));
       $$('#sTimes .slot-chip').forEach((b) => b.classList.toggle('on', b.dataset.v === tEl.value));
       const sum = $('#sSum');
       if (dEl.value && tEl.value) sum.innerHTML = `${I('clock', 14)} <b>${esc(slotLabel(new Date(dEl.value + 'T' + tEl.value + ':00')))}</b> · ${$('#sDur').value} min`;
       else sum.textContent = 'Select a day and a time';
     };
+    $$('#sMode .slot-chip').forEach((b) => b.addEventListener('click', () => { mode = b.dataset.m; sync(); }));
     $$('#sDays .slot-chip').forEach((b) => b.addEventListener('click', () => { dEl.value = b.dataset.v; sync(); }));
     $$('#sTimes .slot-chip').forEach((b) => b.addEventListener('click', () => { tEl.value = b.dataset.v; sync(); }));
     [dEl, tEl, $('#sDur')].forEach((el) => el.addEventListener('input', sync));
@@ -967,6 +1012,7 @@
       if (!dEl.value || !tEl.value) return UI.toast('Please select a day and a time', 'error');
       const start = new Date(dEl.value + 'T' + tEl.value + ':00');
       if (isNaN(start) || start.getTime() < Date.now() + 5 * 60000) return UI.toast('Please pick a time in the future', 'error');
+      if (dEl.value < ymd(minDay)) return UI.toast('Interviews need a 24-hour preparation window. Earliest day: ' + minDay.toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'short' }), 'error');
       const dur = +$('#sDur').value;
       const end = start.getTime() + dur * 60000;
       const clash = data.find((x) => x.id !== d.id && x.round2 && x.round2.slot && start.getTime() < new Date(x.round2.slot.at).getTime() + x.round2.slot.durationMin * 60000 && end > new Date(x.round2.slot.at).getTime());
@@ -975,7 +1021,7 @@
       if (who) { try { localStorage.setItem('dvago_admin_name', who.split(',')[0].trim()); } catch (e) {} }
       const btn = $('#sGo'); btn.disabled = true;
       try {
-        await saveRound2(d, { status: 'slot-set', slot: { at: start.toISOString(), durationMin: dur, label: slotLabel(start) }, interviewer: who, note: $('#sNote').value.trim() }, r2.slot ? 'Slot changed' : 'Slot set');
+        await saveRound2(d, { status: 'slot-set', mode, meetLink: null, send: null, slot: { at: start.toISOString(), durationMin: dur, label: slotLabel(start), tz: (Intl.DateTimeFormat().resolvedOptions().timeZone || '') }, interviewer: who, note: $('#sNote').value.trim() }, r2.slot ? 'Slot changed' : 'Slot set');
       } catch (e) { btn.disabled = false; return UI.toast('Could not save: ' + e.message, 'error'); }
       closeModal(); UI.toast('Slot saved for ' + d.candidate.fullName, 'success'); renderNav();
       if (state.candidateId) renderDetail(); else renderReview();
