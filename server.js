@@ -91,16 +91,35 @@ try { db = Object.assign(db, JSON.parse(fs.readFileSync(DB_FILE, 'utf8'))); } ca
 if (!db.positions) db.positions = {};
 if (!db.users) db.users = {};
 // Org structure: departments -> the role keys (positions families) they own. Edited by the master in the admin "Org structure" tab.
-if (!db.org || !Array.isArray(db.org.departments)) {
-  db.org = { departments: [
-    { id: 'retail', name: 'Retail Operations', roleKeys: ['front-staff', 'cashier', 'store-manager', 'pharma-assistant'] },
-    { id: 'marketing', name: 'Marketing', roleKeys: ['marketing'] },
-    { id: 'finance', name: 'Finance & Accounts', roleKeys: ['finance'] },
-    { id: 'hr', name: 'Human Resources', roleKeys: ['hr'] },
-    { id: 'it', name: 'IT & Technology', roleKeys: ['it'] },
-    { id: 'supply-chain', name: 'Supply Chain', roleKeys: ['supply-chain'] },
-    { id: 'quality', name: 'Quality Assurance', roleKeys: ['quality'] }
+// v:2 = the real DVAGO structure (CEO's direct reports). An untouched older default is replaced once; edits saved from the admin keep v:2.
+if (!db.org || !Array.isArray(db.org.departments) || !db.org.v) {
+  db.org = { v: 2, departments: [
+    { id: 'operations', name: 'Operations', roleKeys: ['front-staff', 'cashier', 'store-manager', 'pharma-assistant', 'supply-chain', 'quality'] },
+    { id: 'ecommerce', name: 'E-Commerce', roleKeys: [] },
+    { id: 'sales', name: 'Commercial & Corporate Sales', roleKeys: [] },
+    { id: 'finance', name: 'Finance', roleKeys: ['finance'] },
+    { id: 'business-planning', name: 'Business Planning & Demand Planning', roleKeys: [] },
+    { id: 'people-culture', name: 'People & Culture', roleKeys: ['hr'] },
+    { id: 'fm-ce', name: 'FM & CE', roleKeys: [] },
+    { id: 'audit-security', name: 'Internal Audit, CCTV & Security', roleKeys: [] },
+    { id: 'it', name: 'Business Application & IT', roleKeys: ['it'] },
+    { id: 'marketing', name: 'Marketing', roleKeys: ['marketing'] }
   ] };
+  Object.values(db.users).forEach((u) => { u.departmentIds = []; }); // old department ids no longer exist
+}
+// One-time HOD accounts from the org chart. No password is set: the master opens Users, sets the real email + a password for each.
+if (!db.hodSeeded) {
+  const mk = (name, email, deps, all) => { if (Object.values(db.users).some((x) => x.email === email)) return; const id = 'u-' + crypto.randomBytes(5).toString('hex'); db.users[id] = { id, name, email, passHash: '', departmentIds: deps, allDepartments: !!all, active: true, createdAt: new Date().toISOString() }; };
+  mk('Wasif Khan', 'wasif@dvago.pk', [], true);
+  mk('Masood Ahmed Khan', 'masood@dvago.pk', ['operations']);
+  mk('Salman Hanif', 'salman.hanif@dvago.pk', ['ecommerce']);
+  mk('Ali Haider', 'ali.haider@dvago.pk', ['sales']);
+  mk('Oan Hussain Ali', 'oan@dvago.pk', ['finance', 'business-planning']);
+  mk('Sarah Munawar', 'sarah.munawar@dvago.pk', ['people-culture', 'fm-ce']);
+  mk('Rezwan Uddin', 'rezwan@dvago.pk', ['audit-security']);
+  mk('Rehan Jawaid', 'rehan@dvago.pk', ['it']);
+  mk('Syed M. Salman', 'salman.syed@dvago.pk', ['marketing']);
+  db.hodSeeded = true; setTimeout(() => persist(), 0);
 }
 // Seed default positions on first run
 if (Object.keys(db.positions).length === 0 && BANK.DEFAULT_POSITIONS) {
@@ -146,6 +165,7 @@ const deptList = () => (db.org && db.org.departments) || [];
 function scopeOf(s) {
   if (!s || s.role === 'master') return null;
   const u = db.users[s.userId]; const ids = new Set((u && u.departmentIds) || []);
+  if (u && u.allDepartments) return new Set(Object.keys(BANK.ROLES));
   const out = new Set(); deptList().filter((d) => ids.has(d.id)).forEach((d) => (d.roleKeys || []).forEach((k) => out.add(k)));
   return out;
 }
@@ -153,7 +173,7 @@ const canSeeRole = (s, roleKey) => { const sc = scopeOf(s); return sc === null |
 function meInfo(s) {
   if (s.role === 'master') return { role: 'master', name: s.name, email: s.email, departments: deptList().map((d) => ({ id: d.id, name: d.name, roleKeys: d.roleKeys || [] })) };
   const u = db.users[s.userId] || {}; const ids = new Set(u.departmentIds || []);
-  return { role: 'hod', id: u.id, name: u.name, email: u.email, departments: deptList().filter((d) => ids.has(d.id)).map((d) => ({ id: d.id, name: d.name, roleKeys: d.roleKeys || [] })) };
+  return { role: 'hod', id: u.id, name: u.name, email: u.email, allDepartments: !!u.allDepartments, departments: deptList().filter((d) => u.allDepartments || ids.has(d.id)).map((d) => ({ id: d.id, name: d.name, roleKeys: d.roleKeys || [] })) };
 }
 
 // ---------------- helpers ----------------
@@ -1092,9 +1112,10 @@ async function api(req, res, url) {
         return { id, name, roleKeys: [...new Set(((d && d.roleKeys) || []).filter((k) => BANK.ROLES[k]))] };
       });
       if (deps.some((d) => !d.name)) return send(res, 400, { error: 'Every department needs a name' });
-      db.org = { departments: deps };
+      db.org = { v: 2, departments: deps };
       // drop deleted departments from users
       Object.values(db.users).forEach((u) => { u.departmentIds = (u.departmentIds || []).filter((id) => seen.has(id)); });
+      db.hodSeeded = true;
       persist(); return send(res, 200, db.org);
     }
   }
@@ -1102,7 +1123,7 @@ async function api(req, res, url) {
   // ---- HOD users (master only) ----
   if (r0 === 'users') {
     if (needMaster()) return;
-    const pubU = (u) => ({ id: u.id, name: u.name, email: u.email, departmentIds: u.departmentIds || [], active: u.active !== false, createdAt: u.createdAt });
+    const pubU = (u) => ({ id: u.id, name: u.name, email: u.email, departmentIds: u.departmentIds || [], allDepartments: !!u.allDepartments, hasPassword: !!u.passHash, active: u.active !== false, createdAt: u.createdAt });
     const cleanDeps = (ids) => [...new Set((Array.isArray(ids) ? ids : []).filter((id) => deptList().some((d) => d.id === id)))];
     if (!r1 && m === 'GET') return send(res, 200, Object.values(db.users).map(pubU));
     if (!r1 && m === 'POST') {
@@ -1112,7 +1133,7 @@ async function api(req, res, url) {
       if (email === ADMIN_EMAIL || Object.values(db.users).some((u) => u.email === email)) return send(res, 409, { error: 'That email is already in use' });
       if (String(b.password || '').length < 8) return send(res, 400, { error: 'Password must be at least 8 characters' });
       const id = 'u-' + crypto.randomBytes(5).toString('hex');
-      db.users[id] = { id, name, email, passHash: hashPw(b.password), departmentIds: cleanDeps(b.departmentIds), active: true, createdAt: new Date().toISOString() };
+      db.users[id] = { id, name, email, passHash: hashPw(b.password), departmentIds: cleanDeps(b.departmentIds), allDepartments: !!b.allDepartments, active: true, createdAt: new Date().toISOString() };
       persist(); return send(res, 201, pubU(db.users[id]));
     }
     const u = db.users[r1]; if (!u) return send(res, 404, { error: 'User not found' });
@@ -1121,6 +1142,7 @@ async function api(req, res, url) {
       if (b.name !== undefined) u.name = String(b.name).trim().slice(0, 80) || u.name;
       if (b.departmentIds !== undefined) u.departmentIds = cleanDeps(b.departmentIds);
       if (b.active !== undefined) u.active = !!b.active;
+      if (b.allDepartments !== undefined) u.allDepartments = !!b.allDepartments;
       if (b.email !== undefined) {
         const email = String(b.email).trim().toLowerCase();
         if (!/^\S+@\S+\.\S+$/.test(email)) return send(res, 400, { error: 'Invalid email' });
