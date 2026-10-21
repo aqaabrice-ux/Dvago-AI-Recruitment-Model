@@ -37,7 +37,8 @@ const EVAL = require('./js/evaluator.js');
 const mailer = require('./mailer.js');
 
 const ROOT = __dirname;
-const DATA = path.join(ROOT, 'data');
+// DATA_DIR lets a hosted deploy keep db.json, resumes, videos and audio on a persistent volume (e.g. Railway Volume mounted at /data).
+const DATA = process.env.DATA_DIR ? path.resolve(process.env.DATA_DIR) : path.join(ROOT, 'data');
 const RESUMES = path.join(DATA, 'resumes');
 const VIDEOS = path.join(DATA, 'videos');
 const VOICE_AUDIO = path.join(DATA, 'voice-audio');
@@ -88,6 +89,19 @@ const DEFAULT_SETTINGS = {
 let db = { invites: {}, submissions: {}, positions: {}, settings: DEFAULT_SETTINGS };
 try { db = Object.assign(db, JSON.parse(fs.readFileSync(DB_FILE, 'utf8'))); } catch (e) {}
 if (!db.positions) db.positions = {};
+if (!db.users) db.users = {};
+// Org structure: departments -> the role keys (positions families) they own. Edited by the master in the admin "Org structure" tab.
+if (!db.org || !Array.isArray(db.org.departments)) {
+  db.org = { departments: [
+    { id: 'retail', name: 'Retail Operations', roleKeys: ['front-staff', 'cashier', 'store-manager', 'pharma-assistant'] },
+    { id: 'marketing', name: 'Marketing', roleKeys: ['marketing'] },
+    { id: 'finance', name: 'Finance & Accounts', roleKeys: ['finance'] },
+    { id: 'hr', name: 'Human Resources', roleKeys: ['hr'] },
+    { id: 'it', name: 'IT & Technology', roleKeys: ['it'] },
+    { id: 'supply-chain', name: 'Supply Chain', roleKeys: ['supply-chain'] },
+    { id: 'quality', name: 'Quality Assurance', roleKeys: ['quality'] }
+  ] };
+}
 // Seed default positions on first run
 if (Object.keys(db.positions).length === 0 && BANK.DEFAULT_POSITIONS) {
   Object.entries(BANK.DEFAULT_POSITIONS).forEach(([roleKey, arr]) => arr.forEach((p) => {
@@ -112,13 +126,34 @@ function safeEq(a, b) {
   const x = Buffer.from(String(a)), y = Buffer.from(String(b));
   return x.length === y.length && crypto.timingSafeEqual(x, y);
 }
+// A session is { exp, role: 'master'|'hod', userId, name, email }. Master = the ADMIN_EMAIL account; HODs live in db.users.
 function isAdmin(req) {
   const h = req.headers.authorization || '';
   const t = h.startsWith('Bearer ') ? h.slice(7) : '';
-  const exp = sessions.get(t);
-  if (!exp) return false;
-  if (exp < Date.now()) { sessions.delete(t); return false; }
-  return true;
+  const s = sessions.get(t);
+  if (!s) return null;
+  if (s.exp < Date.now()) { sessions.delete(t); return null; }
+  if (s.role === 'hod') { const u = db.users[s.userId]; if (!u || u.active === false) { sessions.delete(t); return null; } }
+  return s;
+}
+function hashPw(pw) { const salt = crypto.randomBytes(16).toString('hex'); return salt + ':' + crypto.scryptSync(String(pw), salt, 32).toString('hex'); }
+function checkPw(pw, stored) {
+  const [salt, h] = String(stored || '').split(':'); if (!salt || !h) return false;
+  return safeEq(crypto.scryptSync(String(pw), salt, 32).toString('hex'), h);
+}
+const deptList = () => (db.org && db.org.departments) || [];
+// Role keys a session may see: null = everything (master); otherwise the roles of the HOD's departments.
+function scopeOf(s) {
+  if (!s || s.role === 'master') return null;
+  const u = db.users[s.userId]; const ids = new Set((u && u.departmentIds) || []);
+  const out = new Set(); deptList().filter((d) => ids.has(d.id)).forEach((d) => (d.roleKeys || []).forEach((k) => out.add(k)));
+  return out;
+}
+const canSeeRole = (s, roleKey) => { const sc = scopeOf(s); return sc === null || sc.has(roleKey); };
+function meInfo(s) {
+  if (s.role === 'master') return { role: 'master', name: s.name, email: s.email, departments: deptList().map((d) => ({ id: d.id, name: d.name, roleKeys: d.roleKeys || [] })) };
+  const u = db.users[s.userId] || {}; const ids = new Set(u.departmentIds || []);
+  return { role: 'hod', id: u.id, name: u.name, email: u.email, departments: deptList().filter((d) => ids.has(d.id)).map((d) => ({ id: d.id, name: d.name, roleKeys: d.roleKeys || [] })) };
 }
 
 // ---------------- helpers ----------------
@@ -571,6 +606,9 @@ async function api(req, res, url) {
   const m = req.method;
   const admin = isAdmin(req);
   const needAdmin = () => { if (!admin) { send(res, 401, { error: 'Unauthorized' }); return true; } return false; };
+  // Settings, question editors, positions, org structure and users are master-only (HODs get 403).
+  const needMaster = () => { if (needAdmin()) return true; if (admin.role !== 'master') { send(res, 403, { error: 'Only the master admin can do this' }); return true; } return false; };
+  const noAccess = () => { send(res, 404, { error: 'Not found' }); return true; };
 
   if (r0 === 'health') return send(res, 200, { ok: true, app: 'dvago', version: '2.8', ai: aiEnabled(), model: aiEnabled() ? AI_MODEL : null, mail: mailer.isConfigured(), groq: groqEnabled(), groqModel: groqEnabled() ? GROQ_MODEL : null, tts: TTS_ENABLED && ((groqEnabled() && ttsState.disabledUntil < Date.now()) || (fs.existsSync(TTS_SEED) && fs.readdirSync(TTS_SEED).length > 0)) });
 
@@ -794,6 +832,7 @@ async function api(req, res, url) {
   if (r0 === 'voice-audio' && r1 && r2 && m === 'GET') {
     if (needAdmin()) return;
     const sub = db.submissions[r1];
+    if (sub && !canSeeRole(admin, sub.role)) return noAccess();
     if (!sub) return send(res, 404, { error: 'Not found' });
     const entry = (sub.voice || []).find((v) => v.id === r2);
     if (!entry || !entry.audio || !entry.audio.file) return send(res, 404, { error: 'No audio' });
@@ -823,7 +862,7 @@ async function api(req, res, url) {
       return send(res, 200, items);
     }
     if (!r1 && m === 'POST') {
-      if (needAdmin()) return;
+      if (needMaster()) return;
       const b = await readBody(req);
       if (!b.title || !b.roleKey || !BANK.ROLES[b.roleKey]) return send(res, 400, { error: 'title and valid roleKey required' });
       const id = (b.id || 'pos-' + Date.now().toString(36) + crypto.randomBytes(3).toString('hex')).toLowerCase();
@@ -835,13 +874,13 @@ async function api(req, res, url) {
     const pos = db.positions[r1];
     if (!pos) return send(res, 404, { error: 'Position not found' });
     if (m === 'GET') return send(res, 200, pos);
-    if (m === 'PATCH') { if (needAdmin()) return; Object.assign(pos, pick(await readBody(req), ['title', 'jd', 'roleKey', 'isActive'])); persist(); return send(res, 200, pos); }
-    if (m === 'DELETE') { if (needAdmin()) return; delete db.positions[r1]; persist(); return send(res, 200, { ok: true }); }
+    if (m === 'PATCH') { if (needMaster()) return; Object.assign(pos, pick(await readBody(req), ['title', 'jd', 'roleKey', 'isActive'])); persist(); return send(res, 200, pos); }
+    if (m === 'DELETE') { if (needMaster()) return; delete db.positions[r1]; persist(); return send(res, 200, { ok: true }); }
   }
 
   // ---- email outbox (admin) ----
   if (r0 === 'emails' && m === 'GET') {
-    if (needAdmin()) return;
+    if (needMaster()) return;
     return send(res, 200, mailer.listEmails(50));
   }
 
@@ -855,7 +894,7 @@ async function api(req, res, url) {
     }
     if (r1 && m === 'GET') return send(res, 200, list(r1) || []);
     if (r1 && m === 'PUT') {
-      if (needAdmin()) return;
+      if (needMaster()) return;
       if (!BANK.ROLES[r1]) return send(res, 400, { error: 'Unknown role' });
       const b = await readBody(req);
       if (!Array.isArray(b.items)) return send(res, 400, { error: 'items array required' });
@@ -870,7 +909,7 @@ async function api(req, res, url) {
       persist();
       return send(res, 200, db.sjtQuestions[r1]);
     }
-    if (r1 && m === 'DELETE') { if (needAdmin()) return; delete db.sjtQuestions[r1]; persist(); return send(res, 200, { ok: true }); }
+    if (r1 && m === 'DELETE') { if (needMaster()) return; delete db.sjtQuestions[r1]; persist(); return send(res, 200, { ok: true }); }
   }
 
   // ---- Job simulation (one per role) ----
@@ -879,7 +918,7 @@ async function api(req, res, url) {
     const sim = (rk) => BANK.ROLES[rk] ? (db.simulations[rk] || BANK.roleQuestions(rk).simulation) : null;
     if (r1 && m === 'GET') return send(res, 200, sim(r1) || null);
     if (r1 && m === 'PUT') {
-      if (needAdmin()) return;
+      if (needMaster()) return;
       if (!BANK.ROLES[r1]) return send(res, 400, { error: 'Unknown role' });
       const b = await readBody(req);
       if (!b.title || !Array.isArray(b.items) || b.items.length < 3) return send(res, 400, { error: 'title and >=3 items required' });
@@ -889,7 +928,7 @@ async function api(req, res, url) {
       persist();
       return send(res, 200, db.simulations[r1]);
     }
-    if (r1 && m === 'DELETE') { if (needAdmin()) return; delete db.simulations[r1]; persist(); return send(res, 200, { ok: true }); }
+    if (r1 && m === 'DELETE') { if (needMaster()) return; delete db.simulations[r1]; persist(); return send(res, 200, { ok: true }); }
   }
 
   // ---- Attention challenge (optional custom one per role; default = auto-generated Expiry Check) ----
@@ -897,7 +936,7 @@ async function api(req, res, url) {
     db.challenges = db.challenges || {};
     if (r1 && m === 'GET') return send(res, 200, BANK.ROLES[r1] ? (db.challenges[r1] || null) : null);
     if (r1 && m === 'PUT') {
-      if (needAdmin()) return;
+      if (needMaster()) return;
       if (!BANK.ROLES[r1]) return send(res, 400, { error: 'Unknown role' });
       const b = await readBody(req);
       const tiles = (Array.isArray(b.tiles) ? b.tiles : []).slice(0, 24).map((t) => ({
@@ -918,7 +957,7 @@ async function api(req, res, url) {
       persist();
       return send(res, 200, db.challenges[r1]);
     }
-    if (r1 && m === 'DELETE') { if (needAdmin()) return; delete db.challenges[r1]; persist(); return send(res, 200, { ok: true }); }
+    if (r1 && m === 'DELETE') { if (needMaster()) return; delete db.challenges[r1]; persist(); return send(res, 200, { ok: true }); }
   }
 
   // ---- Case study (one per role) ----
@@ -927,7 +966,7 @@ async function api(req, res, url) {
     const cs = (rk) => BANK.ROLES[rk] ? (db.caseStudies[rk] || BANK.roleQuestions(rk).caseStudy) : null;
     if (r1 && m === 'GET') return send(res, 200, cs(r1) || null);
     if (r1 && m === 'PUT') {
-      if (needAdmin()) return;
+      if (needMaster()) return;
       if (!BANK.ROLES[r1]) return send(res, 400, { error: 'Unknown role' });
       const b = await readBody(req);
       if (!b.title || !b.context || !Array.isArray(b.questions) || b.questions.length < 1) return send(res, 400, { error: 'title, context and >=1 question required' });
@@ -943,7 +982,7 @@ async function api(req, res, url) {
       persist();
       return send(res, 200, db.caseStudies[r1]);
     }
-    if (r1 && m === 'DELETE') { if (needAdmin()) return; delete db.caseStudies[r1]; persist(); return send(res, 200, { ok: true }); }
+    if (r1 && m === 'DELETE') { if (needMaster()) return; delete db.caseStudies[r1]; persist(); return send(res, 200, { ok: true }); }
   }
 
   // ---- Reasoning MCQs (shared across all roles) ----
@@ -952,7 +991,7 @@ async function api(req, res, url) {
     const list = () => db.reasoningQuestions || BANK.REASONING;
     if (!r1 && m === 'GET') return send(res, 200, list());
     if (!r1 && m === 'PUT') {
-      if (needAdmin()) return;
+      if (needMaster()) return;
       const b = await readBody(req);
       if (!Array.isArray(b.items) || b.items.length < 1) return send(res, 400, { error: 'items array required' });
       db.reasoningQuestions = b.items.slice(0, 20).map((it) => ({
@@ -966,7 +1005,7 @@ async function api(req, res, url) {
       persist();
       return send(res, 200, db.reasoningQuestions);
     }
-    if (!r1 && m === 'DELETE') { if (needAdmin()) return; db.reasoningQuestions = null; persist(); return send(res, 200, { ok: true }); }
+    if (!r1 && m === 'DELETE') { if (needMaster()) return; db.reasoningQuestions = null; persist(); return send(res, 200, { ok: true }); }
   }
 
   // ---- voice questions (public GET for merge, admin override) ----
@@ -987,7 +1026,7 @@ async function api(req, res, url) {
     }
     if (r1 && m === 'GET') return send(res, 200, list(r1) || []);
     if (r1 && m === 'PUT') {
-      if (needAdmin()) return;
+      if (needMaster()) return;
       if (!BANK.ROLES[r1]) return send(res, 400, { error: 'Unknown role' });
       const b = await readBody(req);
       if (!Array.isArray(b.items)) return send(res, 400, { error: 'items array required' });
@@ -995,7 +1034,7 @@ async function api(req, res, url) {
       persist();
       return send(res, 200, db.voiceQuestions[r1]);
     }
-    if (r1 && m === 'DELETE') { if (needAdmin()) return; delete db.voiceQuestions[r1]; persist(); return send(res, 200, { ok: true }); }
+    if (r1 && m === 'DELETE') { if (needMaster()) return; delete db.voiceQuestions[r1]; persist(); return send(res, 200, { ok: true }); }
   }
 
   // ---- walk-in schedule confirmation ----
@@ -1011,25 +1050,101 @@ async function api(req, res, url) {
   if (r0 === 'login' && m === 'POST') {
     const b = await readBody(req);
     await new Promise((r) => setTimeout(r, 300));
-    if (safeEq(String(b.email || '').toLowerCase(), ADMIN_EMAIL) && safeEq(String(b.password || ''), ADMIN_PASSWORD)) {
+    const em = String(b.email || '').trim().toLowerCase();
+    let sess = null;
+    if (safeEq(em, ADMIN_EMAIL) && safeEq(String(b.password || ''), ADMIN_PASSWORD)) sess = { role: 'master', name: 'Admin', email: ADMIN_EMAIL };
+    else {
+      const u = Object.values(db.users).find((x) => x.email === em && x.active !== false);
+      if (u && checkPw(b.password || '', u.passHash)) sess = { role: 'hod', userId: u.id, name: u.name, email: u.email };
+    }
+    if (sess) {
       const token = crypto.randomBytes(24).toString('hex');
-      sessions.set(token, Date.now() + SESSION_TTL);
-      return send(res, 200, { token });
+      sessions.set(token, Object.assign({ exp: Date.now() + SESSION_TTL }, sess));
+      return send(res, 200, { token, user: meInfo(sess) });
     }
     return send(res, 401, { error: 'Invalid email or password' });
   }
 
+  if (r0 === 'me') {
+    if (needAdmin()) return;
+    if (!r1 && m === 'GET') return send(res, 200, meInfo(admin));
+    if (r1 === 'password' && m === 'POST') {
+      if (admin.role !== 'hod') return send(res, 400, { error: 'Master password is set with ADMIN_PASSWORD on the server' });
+      const b = await readBody(req); const u = db.users[admin.userId];
+      if (!checkPw(b.current || '', u.passHash)) return send(res, 400, { error: 'Current password is wrong' });
+      if (String(b.password || '').length < 8) return send(res, 400, { error: 'New password must be at least 8 characters' });
+      u.passHash = hashPw(b.password); persist(); return send(res, 200, { ok: true });
+    }
+  }
+
+  // ---- org structure (master edits, anyone signed in can read their own via /me) ----
+  if (r0 === 'org') {
+    if (needMaster()) return;
+    if (m === 'GET') return send(res, 200, db.org);
+    if (m === 'PUT') {
+      const b = await readBody(req);
+      if (!Array.isArray(b.departments)) return send(res, 400, { error: 'departments required' });
+      const seen = new Set();
+      const deps = b.departments.slice(0, 40).map((d) => {
+        const name = String((d && d.name) || '').trim().slice(0, 80);
+        let id = String((d && d.id) || '').toLowerCase().replace(/[^\w-]/g, '').slice(0, 40) || ('d-' + crypto.randomBytes(3).toString('hex'));
+        while (seen.has(id)) id += '-x'; seen.add(id);
+        return { id, name, roleKeys: [...new Set(((d && d.roleKeys) || []).filter((k) => BANK.ROLES[k]))] };
+      });
+      if (deps.some((d) => !d.name)) return send(res, 400, { error: 'Every department needs a name' });
+      db.org = { departments: deps };
+      // drop deleted departments from users
+      Object.values(db.users).forEach((u) => { u.departmentIds = (u.departmentIds || []).filter((id) => seen.has(id)); });
+      persist(); return send(res, 200, db.org);
+    }
+  }
+
+  // ---- HOD users (master only) ----
+  if (r0 === 'users') {
+    if (needMaster()) return;
+    const pubU = (u) => ({ id: u.id, name: u.name, email: u.email, departmentIds: u.departmentIds || [], active: u.active !== false, createdAt: u.createdAt });
+    const cleanDeps = (ids) => [...new Set((Array.isArray(ids) ? ids : []).filter((id) => deptList().some((d) => d.id === id)))];
+    if (!r1 && m === 'GET') return send(res, 200, Object.values(db.users).map(pubU));
+    if (!r1 && m === 'POST') {
+      const b = await readBody(req);
+      const email = String(b.email || '').trim().toLowerCase(), name = String(b.name || '').trim().slice(0, 80);
+      if (!name || !/^\S+@\S+\.\S+$/.test(email)) return send(res, 400, { error: 'Name and a valid email are required' });
+      if (email === ADMIN_EMAIL || Object.values(db.users).some((u) => u.email === email)) return send(res, 409, { error: 'That email is already in use' });
+      if (String(b.password || '').length < 8) return send(res, 400, { error: 'Password must be at least 8 characters' });
+      const id = 'u-' + crypto.randomBytes(5).toString('hex');
+      db.users[id] = { id, name, email, passHash: hashPw(b.password), departmentIds: cleanDeps(b.departmentIds), active: true, createdAt: new Date().toISOString() };
+      persist(); return send(res, 201, pubU(db.users[id]));
+    }
+    const u = db.users[r1]; if (!u) return send(res, 404, { error: 'User not found' });
+    if (m === 'PATCH') {
+      const b = await readBody(req);
+      if (b.name !== undefined) u.name = String(b.name).trim().slice(0, 80) || u.name;
+      if (b.departmentIds !== undefined) u.departmentIds = cleanDeps(b.departmentIds);
+      if (b.active !== undefined) u.active = !!b.active;
+      if (b.email !== undefined) {
+        const email = String(b.email).trim().toLowerCase();
+        if (!/^\S+@\S+\.\S+$/.test(email)) return send(res, 400, { error: 'Invalid email' });
+        if (email !== u.email && (email === ADMIN_EMAIL || Object.values(db.users).some((x) => x.email === email))) return send(res, 409, { error: 'That email is already in use' });
+        u.email = email;
+      }
+      if (b.password) { if (String(b.password).length < 8) return send(res, 400, { error: 'Password must be at least 8 characters' }); u.passHash = hashPw(b.password); }
+      persist(); return send(res, 200, pubU(u));
+    }
+    if (m === 'DELETE') { delete db.users[r1]; persist(); return send(res, 200, { ok: true }); }
+  }
+
   if (r0 === 'settings') {
     if (m === 'GET') return send(res, 200, settings());
-    if (m === 'PUT') { if (needAdmin()) return; const b = await readBody(req); db.settings = Object.assign(settings(), pick(b, ['companyName', 'allowWalkIn', 'showCandidateFeedback', 'weights', 'thresholds', 'followUps'])); persist(); return send(res, 200, db.settings); }
+    if (m === 'PUT') { if (needMaster()) return; const b = await readBody(req); db.settings = Object.assign(settings(), pick(b, ['companyName', 'allowWalkIn', 'showCandidateFeedback', 'weights', 'thresholds', 'followUps'])); persist(); return send(res, 200, db.settings); }
   }
 
   if (r0 === 'invites') {
-    if (!r1 && m === 'GET') { if (needAdmin()) return; return send(res, 200, Object.values(db.invites).sort((a, b) => b.createdAt.localeCompare(a.createdAt))); }
+    if (!r1 && m === 'GET') { if (needAdmin()) return; return send(res, 200, Object.values(db.invites).filter((i) => scopeOf(admin) === null || (i.role && canSeeRole(admin, i.role))).sort((a, b) => b.createdAt.localeCompare(a.createdAt))); }
     if (!r1 && m === 'POST') {
       if (needAdmin()) return;
       const b = await readBody(req);
-      const inv = Object.assign({ status: 'Sent', schedule: null, openedAt: null, completedAt: null }, pick(b, ['name', 'email', 'role', 'note', 'expiresAt']), { token: 'INV' + crypto.randomBytes(6).toString('hex').toUpperCase(), createdAt: new Date().toISOString() });
+      if (admin.role === 'hod' && !canSeeRole(admin, b.role)) return send(res, 403, { error: 'You can only invite candidates for your own departments' });
+      const inv = Object.assign({ status: 'Sent', schedule: null, openedAt: null, completedAt: null }, pick(b, ['name', 'email', 'role', 'note', 'expiresAt']), { token: 'INV' + crypto.randomBytes(6).toString('hex').toUpperCase(), createdAt: new Date().toISOString(), createdBy: admin.name || '' });
       db.invites[inv.token] = inv; persist();
       // Send invitation email in background
       if (inv.email) {
@@ -1043,10 +1158,12 @@ async function api(req, res, url) {
     }
     const inv = db.invites[r1];
     if (!inv) return send(res, 404, { error: 'Invite not found' });
+    if (admin && scopeOf(admin) !== null && !(inv.role && canSeeRole(admin, inv.role))) return noAccess();
     if (m === 'GET') return send(res, 200, admin ? inv : publicInvite(inv));
     if (m === 'PATCH') {
       const b = await readBody(req);
       const wasScheduled = inv.schedule;
+      if (admin && admin.role === 'hod' && b.role !== undefined && !canSeeRole(admin, b.role)) return send(res, 403, { error: 'Role is outside your departments' });
       if (admin) Object.assign(inv, pick(b, ['name', 'email', 'role', 'note', 'expiresAt', 'status', 'schedule']));
       else {
         if (inv.status === 'Completed') return send(res, 409, { error: 'Invite already used' });
@@ -1064,7 +1181,7 @@ async function api(req, res, url) {
       }
       return send(res, 200, admin ? inv : publicInvite(inv));
     }
-    if (m === 'DELETE') { if (needAdmin()) return; delete db.invites[r1]; persist(); return send(res, 200, { ok: true }); }
+    if (m === 'DELETE') { if (needAdmin()) return; if (admin && scopeOf(admin) !== null && !(inv.role && canSeeRole(admin, inv.role))) return noAccess(); delete db.invites[r1]; persist(); return send(res, 200, { ok: true }); }
   }
 
   if (r0 === 'check' && m === 'GET') {
@@ -1075,7 +1192,7 @@ async function api(req, res, url) {
   }
 
   if (r0 === 'submissions') {
-    if (!r1 && m === 'GET') { if (needAdmin()) return; return send(res, 200, listSubs()); }
+    if (!r1 && m === 'GET') { if (needAdmin()) return; const sc = scopeOf(admin); return send(res, 200, sc === null ? listSubs() : listSubs().filter((s) => sc.has(s.role))); }
     if (!r1 && m === 'POST') {
       const b = await readBody(req);
       if (!b.id || !b.candidate || !b.candidate.email || !BANK.ROLES[b.role]) return send(res, 400, { error: 'Invalid submission' });
@@ -1152,6 +1269,7 @@ async function api(req, res, url) {
       }
     }
     if (needAdmin()) return;
+    if (!canSeeRole(admin, sub.role)) return noAccess();
     if (r2 === 'ai-evaluate' && m === 'POST') { const s = await aiEvaluate(r1); return send(res, 200, s); }
     if (r2 === 'round2-email' && m === 'GET') {
       if (!sub.round2 || !sub.round2.slot) return send(res, 400, { error: 'Pick an interview slot first' });
@@ -1180,10 +1298,14 @@ async function api(req, res, url) {
     if (m === 'PATCH') {
       const b = await readBody(req);
       Object.assign(sub, pick(b, ['stage', 'notes', 'rating', 'tags']));
-      if ('round2' in b) sub.round2 = cleanRound2(b.round2);
+      if ('round2' in b) {
+        sub.round2 = cleanRound2(b.round2);
+        if (sub.round2 && !sub.round2.interviewer && admin.role === 'hod') sub.round2.interviewer = admin.name || '';
+      }
       persist(); return send(res, 200, sub);
     }
     if (m === 'DELETE') {
+      if (needMaster()) return;
       if (sub.resume && sub.resume.file) { try { fs.unlinkSync(path.join(RESUMES, path.basename(sub.resume.file))); } catch (e) {} }
       if (sub.videoIntro && sub.videoIntro.file) { try { fs.unlinkSync(path.join(VIDEOS, path.basename(sub.videoIntro.file))); } catch (e) {} }
       try { const audioDir = path.join(VOICE_AUDIO, r1.replace(/[^\w-]/g, '')); if (fs.existsSync(audioDir)) fs.rmSync(audioDir, { recursive: true, force: true }); } catch (e) {}
@@ -1194,6 +1316,7 @@ async function api(req, res, url) {
   if (r0 === 'video' && r1 && m === 'GET') {
     if (needAdmin()) return;
     const sub = db.submissions[r1];
+    if (sub && !canSeeRole(admin, sub.role)) return noAccess();
     if (!sub || !sub.videoIntro || !sub.videoIntro.file) return send(res, 404, { error: 'No video' });
     const fp = path.join(VIDEOS, path.basename(sub.videoIntro.file));
     if (!fs.existsSync(fp)) return send(res, 404, { error: 'File missing' });
@@ -1213,6 +1336,7 @@ async function api(req, res, url) {
   if (r0 === 'resume' && r1 && m === 'GET') {
     if (needAdmin()) return;
     const sub = db.submissions[r1];
+    if (sub && !canSeeRole(admin, sub.role)) return noAccess();
     if (!sub || !sub.resume || !sub.resume.file) return send(res, 404, { error: 'No resume' });
     const fp = path.join(RESUMES, path.basename(sub.resume.file));
     if (!fs.existsSync(fp)) return send(res, 404, { error: 'File missing' });
@@ -1221,7 +1345,7 @@ async function api(req, res, url) {
   }
 
   if (r0 === 'import' && m === 'POST') {
-    if (needAdmin()) return;
+    if (needMaster()) return;
     const b = await readBody(req);
     (b.invites || []).forEach((i) => { if (i.token) db.invites[i.token] = i; });
     (b.submissions || []).forEach((s) => { if (s.id && BANK.ROLES[s.role]) { if (s.resume) delete s.resume.dataUrl; db.submissions[s.id] = s; } });
@@ -1229,7 +1353,7 @@ async function api(req, res, url) {
     return send(res, 200, { ok: true });
   }
   if (r0 === 'clear' && m === 'POST') {
-    if (needAdmin()) return;
+    if (needMaster()) return;
     db.invites = {}; db.submissions = {};
     fs.readdirSync(RESUMES).forEach((f) => { try { fs.unlinkSync(path.join(RESUMES, f)); } catch (e) {} });
     persist();
