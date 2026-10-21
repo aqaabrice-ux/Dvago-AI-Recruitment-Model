@@ -145,9 +145,81 @@ function cleanRound2(r) {
   if (!r || typeof r !== 'object') return null;
   const s = (v, n) => String(v == null ? '' : v).slice(0, n);
   const iso = (v) => { const t = new Date(v); return isNaN(t) ? null : t.toISOString(); };
-  const out = { status: ['approved', 'slot-set'].includes(r.status) ? r.status : 'approved', approvedBy: s(r.approvedBy, 80), approvedAt: iso(r.approvedAt), interviewer: s(r.interviewer, 160), note: s(r.note, 500) };
-  if (r.slot && iso(r.slot.at)) out.slot = { at: iso(r.slot.at), durationMin: Math.min(240, Math.max(10, parseInt(r.slot.durationMin, 10) || 45)), label: s(r.slot.label, 80) };
+  const out = { status: ['approved', 'slot-set', 'sent'].includes(r.status) ? r.status : 'approved', approvedBy: s(r.approvedBy, 80), approvedAt: iso(r.approvedAt), interviewer: s(r.interviewer, 160), note: s(r.note, 500) };
+  if (r.slot && iso(r.slot.at)) out.slot = { at: iso(r.slot.at), durationMin: Math.min(240, Math.max(10, parseInt(r.slot.durationMin, 10) || 45)), label: s(r.slot.label, 80), tz: s(r.slot.tz, 60) };
+  out.mode = r.mode === 'onsite' ? 'onsite' : 'online';
+  if (r.venue && typeof r.venue === 'object') out.venue = { name: s(r.venue.name, 120), address: s(r.venue.address, 300), mapUrl: /^https?:\/\//i.test(r.venue.mapUrl || '') ? s(r.venue.mapUrl, 400) : '', meetWith: s(r.venue.meetWith, 160) };
+  if (r.meetLink && /^https:\/\/meet\.google\.com\//.test(r.meetLink)) out.meetLink = s(r.meetLink, 200);
+  if (r.send && typeof r.send === 'object') out.send = { state: ['sent', 'failed'].includes(r.send.state) ? r.send.state : 'failed', at: iso(r.send.at), error: s(r.send.error, 300), threaded: !!r.send.threaded };
   out.history = (Array.isArray(r.history) ? r.history : []).slice(-50).map((h) => ({ at: iso(h && h.at), event: s(h && h.event, 60), by: s(h && h.by, 80) }));
+  return out;
+}
+// ---- Round-2 invitation email (built here; sent by the Apps Script web app from the HR Gmail account) ----
+const R2_SCRIPT_URL = process.env.ROUND2_SCRIPT_URL || '';
+const R2_SCRIPT_KEY = process.env.ROUND2_SCRIPT_KEY || '';
+const R2_SENDER_NAME = process.env.ROUND2_SENDER_NAME || 'Dvago HR';
+const hesc = (v) => String(v == null ? '' : v).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+function r2When(slot) {
+  const tz = slot.tz || 'Asia/Karachi';
+  let d = new Date(slot.at), date, time;
+  try {
+    date = new Intl.DateTimeFormat('en-GB', { timeZone: tz, weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' }).format(d);
+    time = new Intl.DateTimeFormat('en-US', { timeZone: tz, hour: 'numeric', minute: '2-digit', hour12: true }).format(d);
+  } catch (e) { date = d.toUTCString(); time = ''; }
+  const abbr = tz === 'Asia/Karachi' ? 'PKT' : tz;
+  return { date, time: time + ' (' + abbr + ')' };
+}
+// Meet placeholder {{MEET_LINK}} is filled in by the Apps Script once the calendar event exists.
+function buildRound2Email(sub) {
+  const r2 = sub.round2 || {};
+  const c = sub.candidate || {};
+  const first = String(c.fullName || 'there').trim().split(/\s+/)[0];
+  const w = r2When(r2.slot);
+  const online = r2.mode !== 'onsite';
+  const v = r2.venue || {};
+  const rows = [['Date', w.date], ['Time', w.time], ['Duration', r2.slot.durationMin + ' minutes'], ['Role', sub.roleTitle || '']];
+  if (online) rows.push(['Format', 'Online (Google Meet)'], ['Meeting link', '{{MEET_LINK}}']);
+  else {
+    rows.push(['Format', 'On-site interview']);
+    // Venue details live in the Apps Script (VENUE config); it fills these placeholders and drops empty rows.
+    rows.push(['Venue', '{{VENUE_NAME}}'], ['Address', '{{VENUE_ADDRESS}}'], ['Map', '{{VENUE_MAP}}'], ['Please ask for', '{{VENUE_MEET_WITH}}']);
+  }
+  if (r2.interviewer) rows.push(['Interviewer', r2.interviewer]);
+  const intro = `Congratulations! After reviewing your assessment, our team has shortlisted you for the next round of interviews for the ${sub.roleTitle || 'position'} role at DVAGO.`;
+  const outro = online
+    ? 'Please join a few minutes early and make sure your camera, microphone and internet connection are working.'
+    : 'Please arrive about 10 minutes early and carry a valid ID (CNIC).';
+  const resched = 'If this time does not work for you, simply reply to this email and we will arrange another slot.';
+  const text = [`Dear ${first},`, '', intro, '', rows.map(([k, val]) => `${k}: ${val}`).join('\n'), r2.note ? '\nNote: ' + r2.note : '', '', outro, resched, '', 'Best regards,', R2_SENDER_NAME, 'DVAGO'].join('\n');
+  const tr = rows.map(([k, val]) => {
+    const cell = k === 'Meeting link' ? `<a href="{{MEET_LINK}}">{{MEET_LINK}}</a>` : k === 'Map' ? `<a href="{{VENUE_MAP}}">{{VENUE_MAP}}</a>` : hesc(val);
+    return `<tr><td style="padding:6px 16px 6px 0;color:#667;white-space:nowrap">${hesc(k)}</td><td style="padding:6px 0"><b>${cell}</b></td></tr>`;
+  }).join('');
+  const html = `<div style="font-family:Arial,Helvetica,sans-serif;font-size:14px;line-height:1.6;color:#1a1f36"><p>Dear ${hesc(first)},</p><p>${hesc(intro)}</p><table style="border-collapse:collapse;margin:12px 0">${tr}</table>${r2.note ? `<p><b>Note:</b> ${hesc(r2.note)}</p>` : ''}<p>${hesc(outro)}</p><p>${hesc(resched)}</p><p>Best regards,<br>${hesc(R2_SENDER_NAME)}<br>DVAGO</p></div>`;
+  return { to: c.email || '', subject: `Shortlisted for the next round – DVAGO (${sub.roleTitle || 'Interview'})`, html, text, online };
+}
+async function sendRound2(sub) {
+  const r2 = sub.round2;
+  if (!r2 || !r2.slot) throw Object.assign(new Error('Pick an interview slot first'), { status: 400 });
+  if (!sub.candidate || !/^\S+@\S+\.\S+$/.test(sub.candidate.email || '')) throw Object.assign(new Error('Candidate has no valid email'), { status: 400 });
+  if (!R2_SCRIPT_URL || !R2_SCRIPT_KEY) throw Object.assign(new Error('Email sender is not configured (set ROUND2_SCRIPT_URL and ROUND2_SCRIPT_KEY on the server)'), { status: 503 });
+  const mail = buildRound2Email(sub);
+  const start = new Date(r2.slot.at), end = new Date(start.getTime() + r2.slot.durationMin * 60000);
+  const payload = {
+    key: R2_SCRIPT_KEY, to: mail.to, name: sub.candidate.fullName, senderName: R2_SENDER_NAME, subject: mail.subject, html: mail.html, text: mail.text,
+    online: mail.online, startISO: start.toISOString(), endISO: end.toISOString(), tz: r2.slot.tz || 'Asia/Karachi',
+    title: `DVAGO interview – ${sub.candidate.fullName} (${sub.roleTitle || ''})`
+  };
+  const ctrl = new AbortController(); const timer = setTimeout(() => ctrl.abort(), 40000);
+  let out;
+  try {
+    const res = await fetch(R2_SCRIPT_URL, { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' }, body: JSON.stringify(payload), signal: ctrl.signal });
+    const raw = await res.text();
+    try { out = JSON.parse(raw); } catch (e) { throw new Error('Email sender returned an unexpected response (check the Apps Script deployment is "Anyone" access)'); }
+  } catch (e) {
+    throw Object.assign(new Error(e.name === 'AbortError' ? 'Email sender timed out' : e.message), { status: 502 });
+  } finally { clearTimeout(timer); }
+  if (!out || !out.ok) throw Object.assign(new Error((out && out.error) || 'Email sender failed'), { status: 502 });
   return out;
 }
 const publicInvite = (i) => pick(i, ['token', 'name', 'email', 'role', 'status', 'expiresAt', 'schedule']);
@@ -1081,6 +1153,29 @@ async function api(req, res, url) {
     }
     if (needAdmin()) return;
     if (r2 === 'ai-evaluate' && m === 'POST') { const s = await aiEvaluate(r1); return send(res, 200, s); }
+    if (r2 === 'round2-email' && m === 'GET') {
+      if (!sub.round2 || !sub.round2.slot) return send(res, 400, { error: 'Pick an interview slot first' });
+      const e = buildRound2Email(sub);
+      return send(res, 200, { to: e.to, subject: e.subject, html: e.html.replace(/\{\{MEET_LINK\}\}/g, 'https://meet.google.com/xxx-xxxx-xxx').replace(/\{\{VENUE_(\w+)\}\}/g, '(venue $1 is filled in by the email script)'), configured: !!(R2_SCRIPT_URL && R2_SCRIPT_KEY), sender: R2_SENDER_NAME });
+    }
+    if (r2 === 'round2-send' && m === 'POST') {
+      const prev = sub.round2 || {};
+      try {
+        const out = await sendRound2(sub);
+        const now = new Date().toISOString();
+        sub.round2 = Object.assign({}, prev, { status: 'sent', meetLink: out.meetLink || undefined, send: { state: 'sent', at: now, error: '', threaded: !!out.threaded } });
+        sub.round2.history = (prev.history || []).concat([{ at: now, event: 'Invitation emailed', by: 'System' }]);
+        sub.round2 = cleanRound2(sub.round2); persist();
+        console.log(`[round2] invitation sent to ${sub.candidate.email} (${r1})`);
+        return send(res, 200, sub);
+      } catch (e) {
+        const now = new Date().toISOString();
+        sub.round2 = cleanRound2(Object.assign({}, prev, { send: { state: 'failed', at: now, error: e.message }, history: (prev.history || []).concat([{ at: now, event: 'Email failed', by: 'System' }]) }));
+        persist();
+        console.error('[round2] send failed for', r1, e.message);
+        return send(res, e.status || 500, { error: e.message });
+      }
+    }
     if (m === 'GET') return send(res, 200, sub);
     if (m === 'PATCH') {
       const b = await readBody(req);
