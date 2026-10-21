@@ -1098,8 +1098,8 @@
         <div class="actions"><button class="btn btn-primary btn-sm" id="newUser">${I('plus', 15)} New user</button></div></div>
       <div class="table-wrap">${users.length ? `<table class="tbl"><thead><tr><th>Name</th><th>Email</th><th>Departments</th><th>Status</th><th style="text-align:right">Action</th></tr></thead><tbody>
         ${users.map((u) => `<tr><td><div class="td-cand"><div class="av" style="background:${avColor(u.name)}">${initials(u.name)}</div><div><b>${esc(u.name)}</b></div></div></td><td>${esc(u.email)}</td>
-          <td>${u.departmentIds.length ? u.departmentIds.map((id) => `<span class="badge b-info" style="margin-right:4px">${esc(dn(id))}</span>`).join('') : '<span style="color:var(--muted)">None</span>'}</td>
-          <td><span class="badge ${u.active ? 'b-good' : 'b-neutral'}">${u.active ? 'Active' : 'Disabled'}</span></td>
+          <td>${u.allDepartments ? '<span class="badge b-good">All departments (CEO)</span>' : u.departmentIds.length ? u.departmentIds.map((id) => `<span class="badge b-info" style="margin-right:4px">${esc(dn(id))}</span>`).join('') : '<span style="color:var(--muted)">None</span>'}</td>
+          <td><span class="badge ${u.active ? 'b-good' : 'b-neutral'}">${u.active ? 'Active' : 'Disabled'}</span>${u.hasPassword ? '' : ' <span class="badge b-warn" title="Open Edit, set the real email and a password">Set password</span>'}</td>
           <td style="text-align:right;white-space:nowrap"><button class="btn btn-outline btn-sm" data-edit="${u.id}">${I('settings', 14)} Edit</button> <button class="btn btn-outline btn-sm" data-rm="${u.id}" title="Delete">${I('trash', 14)}</button></td></tr>`).join('')}
       </tbody></table>` : `<div class="empty"><div class="ei">${I('people', 24)}</div><h3>No HODs yet</h3><p>Create a user and assign their departments.</p></div>`}</div>`;
     $('#newUser').addEventListener('click', () => openUserModal(null, org, renderUsers));
@@ -1117,7 +1117,8 @@
       <div class="m-body">
         <label class="fld"><span>Full name</span><input class="inp" id="uName" value="${esc(u ? u.name : '')}" placeholder="e.g. Hafeez Ahmed"></label>
         <label class="fld"><span>Email (login)</span><input class="inp" id="uEmail" type="email" value="${esc(u ? u.email : '')}" placeholder="name@dvago.com"></label>
-        <label class="fld"><span>${u ? 'New password (leave empty to keep)' : 'Password (min 8 characters)'}</span><div style="display:flex;gap:8px"><input class="inp" id="uPass" style="flex:1" value="${u ? '' : gen()}"><button type="button" class="btn btn-outline btn-sm" id="uGen">Generate</button></div></label>
+        <label class="fld"><span>${u && u.hasPassword ? 'New password (leave empty to keep)' : 'Password (min 8 characters)'}</span><div style="display:flex;gap:8px"><input class="inp" id="uPass" style="flex:1" value="${u && u.hasPassword ? '' : gen()}"><button type="button" class="btn btn-outline btn-sm" id="uGen">Generate</button></div></label>
+        <label class="fld" style="flex-direction:row;gap:8px;align-items:center"><input type="checkbox" id="uAll" ${u && u.allDepartments ? 'checked' : ''}> <span>All departments (CEO: sees everything, with a department filter)</span></label>
         <div class="fld"><span>Departments</span><div class="slot-chips" id="uDeps">${org.departments.map((x) => `<button type="button" class="slot-chip ${u && u.departmentIds.includes(x.id) ? 'on' : ''}" data-id="${esc(x.id)}">${esc(x.name)}</button>`).join('') || 'No departments yet. Create them in the Org structure tab.'}</div></div>
         ${u ? `<label class="fld" style="flex-direction:row;gap:8px;align-items:center"><input type="checkbox" id="uActive" ${u.active ? 'checked' : ''}> <span>Account active</span></label>` : ''}
       </div>
@@ -1125,7 +1126,7 @@
     $$('#uDeps .slot-chip').forEach((b) => b.addEventListener('click', () => b.classList.toggle('on')));
     $('#uGen').addEventListener('click', () => { $('#uPass').value = gen(); });
     $('#uSave').addEventListener('click', async () => {
-      const body = { name: $('#uName').value.trim(), email: $('#uEmail').value.trim(), departmentIds: $$('#uDeps .slot-chip.on').map((b) => b.dataset.id) };
+      const body = { name: $('#uName').value.trim(), email: $('#uEmail').value.trim(), departmentIds: $$('#uDeps .slot-chip.on').map((b) => b.dataset.id), allDepartments: $('#uAll').checked };
       const pw = $('#uPass').value; if (pw) body.password = pw;
       if (u) body.active = $('#uActive').checked;
       if (!body.name || !body.email) return UI.toast('Name and email are required', 'error');
