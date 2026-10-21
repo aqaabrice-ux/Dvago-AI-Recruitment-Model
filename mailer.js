@@ -8,7 +8,7 @@
 const fs = require('fs');
 const path = require('path');
 
-const EMAILS_DIR = path.join(__dirname, 'data', 'emails');
+const EMAILS_DIR = path.join(process.env.DATA_DIR ? path.resolve(process.env.DATA_DIR) : path.join(__dirname, 'data'), 'emails');
 fs.mkdirSync(EMAILS_DIR, { recursive: true });
 
 let nodemailer = null;
