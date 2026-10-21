@@ -408,6 +408,17 @@
       return api('submissions/' + encodeURIComponent(id) + '/ai-evaluate', { method: 'POST' });
     },
 
+    async round2Email(id) {
+      await init();
+      if (mode !== 'server') throw new Error('Sending the invitation needs the DVAGO server running.');
+      return api('submissions/' + encodeURIComponent(id) + '/round2-email');
+    },
+    async round2Send(id) {
+      await init();
+      if (mode !== 'server') throw new Error('Sending the invitation needs the DVAGO server running.');
+      return api('submissions/' + encodeURIComponent(id) + '/round2-send', { method: 'POST' });
+    },
+
     // ----- bulk -----
     async exportAll() {
       return { exportedAt: new Date().toISOString(), invites: await Store.listInvites(), submissions: await Store.listSubmissions(), settings: await Store.getSettings() };
