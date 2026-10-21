@@ -5,8 +5,18 @@
   const $$ = (s, r = document) => Array.from(r.querySelectorAll(s));
   const view = $('#view');
   let charts = {};
-  let data = [];
-  let state = { tab: 'dashboard', filters: { role: '', stage: '', q: '' }, sort: 'date-desc', page: 1, perPage: 15, candidateId: null };
+  let data = [], allData = [];
+  let me = { role: 'master', name: 'Admin', email: '', departments: [] };
+  const isMaster = () => me.role === 'master';
+  // Roles visible in pickers/filters: everything for master, otherwise the roles of the selected department(s).
+  const deptRoleKeys = () => {
+    const ds = state.dept ? me.departments.filter((x) => x.id === state.dept) : me.departments;
+    return new Set(ds.flatMap((x) => x.roleKeys || []));
+  };
+  const myRoleEntries = () => Object.entries(B.ROLES).filter(([k]) => (isMaster() && !state.dept) || deptRoleKeys().has(k));
+  function applyDept() { data = state.dept ? allData.filter((d) => deptRoleKeys().has(d.role)) : allData; }
+  async function loadData() { allData = await Store.listSubmissions(); applyDept(); }
+  let state = { tab: 'dashboard', filters: { role: '', stage: '', q: '' }, sort: 'date-desc', page: 1, perPage: 15, candidateId: null, dept: '' };
 
   const AVATAR_COLORS = ['#78B943', '#3987e5', '#8B5CF6', '#F5A524', '#14B8A6', '#E34948', '#4a3aa7', '#eb6834'];
   const avColor = (name) => AVATAR_COLORS[Math.abs([...String(name || '')].reduce((a, c) => a + c.charCodeAt(0), 0)) % AVATAR_COLORS.length];
@@ -67,7 +77,7 @@
     $('#menuBtn').addEventListener('click', () => $('#side').classList.toggle('open'));
     $('#themeBtn').addEventListener('click', toggleTheme);
     $('#meBtn').addEventListener('click', (e) => openMenu(e, [
-      { icon: 'settings', label: 'Settings', fn: () => switchTab('settings') },
+      isMaster() ? { icon: 'settings', label: 'Settings', fn: () => switchTab('settings') } : { icon: 'shield', label: 'Change password', fn: openMyPassword },
       { icon: 'logout', label: 'Sign out', danger: true, fn: () => { Store.logout(); location.reload(); } }
     ]));
     $('#gSearch').addEventListener('input', (e) => { state.filters.q = e.target.value; if (state.tab === 'candidates') { state.page = 1; render(); } });
@@ -89,7 +99,10 @@
   }
 
   async function boot() {
-    try { data = await Store.listSubmissions(); } catch (e) { console.error(e); data = []; }
+    try { me = await Store.me(); } catch (e) { console.error(e); }
+    try { const sd = sessionStorage.getItem('dvago_admin_dept'); if (sd && me.departments.some((x) => x.id === sd)) state.dept = sd; } catch (e) {}
+    $('#meBtn').innerHTML = `<span class="av">${esc(initials(me.name || 'AD'))}</span><span class="me-txt"><b>${esc(me.name || 'HR Admin')}</b><small>${esc(me.email || '')}${isMaster() ? ' · Master' : ' · HOD'}</small></span>`;
+    try { await loadData(); } catch (e) { console.error(e); data = allData = []; }
     renderNav();
     renderSideCard();
     render();
@@ -98,19 +111,31 @@
   function renderNav() {
     const n = data.length;
     const newCount = data.filter((d) => d.stage === 'New' || !d.stage).length;
-    $('#nav').innerHTML = [
+    const M = isMaster();
+    const dsw = (M ? me.departments.length > 0 : me.departments.length > 1)
+      ? `<label class="dept-switch">${I('target', 14)}<select id="deptSel"><option value="">${M ? 'All departments' : 'All my departments'}</option>${me.departments.map((x) => `<option value="${esc(x.id)}" ${state.dept === x.id ? 'selected' : ''}>${esc(x.name)}</option>`).join('')}</select></label>`
+      : (!M && me.departments.length === 1 ? `<div class="dept-switch one">${I('target', 14)}<span>${esc(me.departments[0].name)}</span></div>` : '');
+    $('#nav').innerHTML = dsw + [
       { k: 'dashboard', ico: 'grid', label: 'Dashboard' },
       { k: 'candidates', ico: 'people', label: 'Candidates', cnt: n },
       { k: 'inbox', ico: 'bell', label: 'Inbox', cnt: newCount || null },
       { k: 'review', ico: 'award', label: 'Recommended', cnt: pendingReviewCount() || null },
       { k: 'invites', ico: 'send', label: 'Invitations' },
       { k: 'analytics', ico: 'chart', label: 'Analytics' },
-      { k: 'positions', ico: 'target', label: 'Positions & JDs' },
-      { k: 'roles', ico: 'book', label: 'Questions Editor' },
-      { k: 'emails', ico: 'mail', label: 'Email outbox' },
-      { k: 'settings', ico: 'settings', label: 'Settings' }
-    ].map((it) => `<button class="nav-item ${state.tab === it.k ? 'active' : ''}" data-k="${it.k}">${I(it.ico, 18)}<span>${esc(it.label)}</span>${it.cnt ? `<span class="cnt">${it.cnt}</span>` : ''}</button>`).join('');
+      { k: 'positions', ico: 'target', label: 'Positions & JDs', master: true },
+      { k: 'roles', ico: 'book', label: 'Questions Editor', master: true },
+      { k: 'emails', ico: 'mail', label: 'Email outbox', master: true },
+      { k: 'org', ico: 'store', label: 'Org structure', master: true, server: true },
+      { k: 'users', ico: 'people', label: 'Users (HODs)', master: true, server: true },
+      { k: 'settings', ico: 'settings', label: 'Settings', master: true }
+    ].filter((it) => (M || !it.master) && (!it.server || Store.mode === 'server')).map((it) => `<button class="nav-item ${state.tab === it.k ? 'active' : ''}" data-k="${it.k}">${I(it.ico, 18)}<span>${esc(it.label)}</span>${it.cnt ? `<span class="cnt">${it.cnt}</span>` : ''}</button>`).join('');
     $$('.nav-item').forEach((b) => b.addEventListener('click', () => switchTab(b.dataset.k)));
+    const ds = $('#deptSel');
+    if (ds) ds.addEventListener('change', () => {
+      state.dept = ds.value; state.filters.role = ''; state.page = 1; applyDept();
+      try { sessionStorage.setItem('dvago_admin_dept', state.dept); } catch (e) {}
+      renderNav(); render();
+    });
   }
   function renderSideCard() {
     const ai = Store.serverInfo && Store.serverInfo.ai;
@@ -128,8 +153,11 @@
   }
 
   function render() {
+    if (!isMaster() && ['positions', 'roles', 'emails', 'settings', 'org', 'users'].includes(state.tab)) state.tab = 'dashboard';
     if (state.candidateId) return renderDetail();
     ({
+      org: renderOrg,
+      users: renderUsers,
       dashboard: renderDashboard,
       candidates: renderCandidates,
       inbox: renderInbox,
@@ -463,7 +491,7 @@
       </div>
       <div class="table-wrap">
         <div class="table-ctrls">
-          <label class="chip-sel ${state.filters.role ? 'active' : ''}">${I('target', 14)}<select id="fRole"><option value="">All roles</option>${Object.entries(B.ROLES).map(([k, r]) => `<option value="${k}" ${state.filters.role === k ? 'selected' : ''}>${esc(r.title)}</option>`).join('')}</select></label>
+          <label class="chip-sel ${state.filters.role ? 'active' : ''}">${I('target', 14)}<select id="fRole"><option value="">All roles</option>${myRoleEntries().map(([k, r]) => `<option value="${k}" ${state.filters.role === k ? 'selected' : ''}>${esc(r.title)}</option>`).join('')}</select></label>
           <label class="chip-sel ${state.filters.stage ? 'active' : ''}">${I('kanban', 14)}<select id="fStage"><option value="">All stages</option>${['New', 'Screening', 'Interview', 'Offer', 'Hired', 'Rejected'].map((s) => `<option ${state.filters.stage === s ? 'selected' : ''}>${esc(s)}</option>`).join('')}</select></label>
           <button class="chip-sel" id="clearF">${I('x', 14)} Clear</button>
         </div>
@@ -474,7 +502,7 @@
     $('#clearF').addEventListener('click', () => { state.filters = { role: '', stage: '', q: '' }; $('#gSearch').value = ''; state.page = 1; render(); });
     $('#newInvite').addEventListener('click', openInviteModal);
     $('#exportBtn').addEventListener('click', exportCSV);
-    $('#refreshBtn').addEventListener('click', async () => { data = await Store.listSubmissions(); UI.toast('Refreshed · ' + data.length + ' candidates', 'success'); render(); });
+    $('#refreshBtn').addEventListener('click', async () => { await loadData(); UI.toast('Refreshed · ' + data.length + ' candidates', 'success'); render(); });
     attachRowClicks();
     attachSort();
   }
@@ -691,7 +719,7 @@
     ]));
     const ab = $('#aiBtn'); if (ab) ab.addEventListener('click', async () => {
       ab.disabled = true; ab.innerHTML = `${I('refresh', 15)} AI thinking…`;
-      try { await Store.aiEvaluate(d.id); UI.toast('AI evaluation complete', 'success'); data = await Store.listSubmissions(); render(); }
+      try { await Store.aiEvaluate(d.id); UI.toast('AI evaluation complete', 'success'); await loadData(); render(); }
       catch (e) { UI.toast(e.message, 'error'); ab.disabled = false; ab.innerHTML = `${I('brain', 15)} Run Claude AI`; }
     });
     const dlr = $('#dlResume'); if (dlr) dlr.addEventListener('click', async () => {
@@ -826,7 +854,7 @@
       <div class="m-head"><div class="m-ico bad">${I('trash', 20)}</div><div><h3>Delete this candidate?</h3><p>This will permanently remove ${esc(d.candidate.fullName)}'s submission.</p></div></div>
       <div class="m-foot"><button class="btn btn-outline" data-dismiss>Cancel</button><button class="btn btn-danger" id="confirmDel">Delete</button></div>
     `);
-    $('#confirmDel').addEventListener('click', async () => { await Store.deleteSubmission(d.id); UI.toast('Candidate deleted', 'success'); state.candidateId = null; data = await Store.listSubmissions(); render(); closeModal(); });
+    $('#confirmDel').addEventListener('click', async () => { await Store.deleteSubmission(d.id); UI.toast('Candidate deleted', 'success'); state.candidateId = null; await loadData(); render(); closeModal(); });
   }
 
   // ---------- Inbox ----------
@@ -848,7 +876,7 @@
   const r2Status = (d) => (d.round2 && d.round2.status) || 'pending';
   const reviewList = () => data.filter((d) => isRecommended(d) || d.round2);
   const pendingReviewCount = () => reviewList().filter((d) => r2Status(d) === 'pending').length;
-  const myName = () => { try { return localStorage.getItem('dvago_admin_name') || ''; } catch (e) { return ''; } };
+  const myName = () => { if (!isMaster()) return me.name || ''; try { return localStorage.getItem('dvago_admin_name') || ''; } catch (e) { return ''; } };
   const tzShort = () => new Date().getTimezoneOffset() === -300 ? 'PKT' : (new Intl.DateTimeFormat(undefined, { timeZoneName: 'short' }).formatToParts(new Date()).find((p) => p.type === 'timeZoneName') || {}).value || '';
   const slotLabel = (at) => new Date(at).toLocaleString('en-GB', { weekday: 'short', day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit', hour12: true }) + ' (' + tzShort() + ')';
 
@@ -894,7 +922,7 @@
         </tbody></table>`}
       </div>`;
     $$('#rvTabs .sec-tab').forEach((b) => b.addEventListener('click', () => { state.reviewFilter = b.dataset.f; renderReview(); }));
-    $('#refreshBtn').addEventListener('click', async () => { data = await Store.listSubmissions(); renderNav(); UI.toast('Refreshed', 'success'); renderReview(); });
+    $('#refreshBtn').addEventListener('click', async () => { await loadData(); renderNav(); UI.toast('Refreshed', 'success'); renderReview(); });
     $$('[data-act]').forEach((b) => b.addEventListener('click', (e) => { e.stopPropagation(); reviewAction(b.dataset.act, b.dataset.id); }));
   }
 
@@ -951,7 +979,7 @@
         closeModal(); UI.toast('Invitation emailed to ' + d.candidate.fullName, 'success');
       } catch (e) {
         UI.toast('Could not send: ' + e.message, 'error'); closeModal();
-        try { data = await Store.listSubmissions(); } catch (x) {}
+        try { await loadData(); } catch (x) {}
       }
       renderNav(); if (state.candidateId) renderDetail(); else renderReview();
     });
@@ -1028,6 +1056,106 @@
     });
   }
 
+  // ---------- Org structure (master) ----------
+  async function renderOrg() {
+    let org; try { org = await Store.getOrg(); } catch (e) { view.innerHTML = `<div class="empty"><h3>Could not load</h3><p>${esc(e.message)}</p></div>`; return; }
+    const deps = org.departments.map((x) => Object.assign({}, x, { roleKeys: (x.roleKeys || []).slice() }));
+    const draw = () => {
+      const used = new Set(deps.flatMap((x) => x.roleKeys));
+      const free = Object.entries(B.ROLES).filter(([k]) => !used.has(k));
+      view.innerHTML = `
+        <div class="page-head">
+          <div><h1>Org structure</h1><p>Departments and the roles that belong to them. HODs only see candidates of the departments assigned to them (Users tab).</p></div>
+          <div class="actions"><button class="btn btn-outline btn-sm" id="addDep">${I('plus', 15)} Add department</button> <button class="btn btn-primary btn-sm" id="saveOrg">${I('check', 15)} Save structure</button></div>
+        </div>
+        ${free.length ? `<div class="slot-sum" style="margin-bottom:14px">${I('alert', 14)} Not in any department (visible to master only): <b>${free.map(([, r]) => esc(r.title)).join(', ')}</b></div>` : ''}
+        <div style="display:grid;gap:14px">
+          ${deps.map((x, i) => `<div class="side-panel" data-i="${i}">
+            <div style="display:flex;gap:10px;align-items:center;margin-bottom:10px"><input class="inp dep-name" data-i="${i}" value="${esc(x.name)}" placeholder="Department name" style="flex:1;font-weight:600"><button class="btn btn-outline btn-sm" data-deldep="${i}" title="Remove department">${I('x', 14)}</button></div>
+            <div class="slot-chips">${Object.entries(B.ROLES).map(([k, r]) => `<button type="button" class="slot-chip ${x.roleKeys.includes(k) ? 'on' : ''}" data-i="${i}" data-role="${k}">${esc(r.title)}</button>`).join('')}</div>
+          </div>`).join('') || `<div class="empty"><h3>No departments yet</h3><p>Add your first department.</p></div>`}
+        </div>`;
+      $$('.dep-name').forEach((el) => el.addEventListener('input', () => { deps[+el.dataset.i].name = el.value; }));
+      $$('[data-role]').forEach((el) => el.addEventListener('click', () => { const x = deps[+el.dataset.i]; const k = el.dataset.role; x.roleKeys = x.roleKeys.includes(k) ? x.roleKeys.filter((r) => r !== k) : x.roleKeys.concat(k); draw(); }));
+      $$('[data-deldep]').forEach((el) => el.addEventListener('click', () => { deps.splice(+el.dataset.deldep, 1); draw(); }));
+      $('#addDep').addEventListener('click', () => { deps.push({ id: '', name: '', roleKeys: [] }); draw(); });
+      $('#saveOrg').addEventListener('click', async () => {
+        if (deps.some((x) => !x.name.trim())) return UI.toast('Every department needs a name', 'error');
+        try { const saved = await Store.saveOrg({ departments: deps }); deps.splice(0, deps.length, ...saved.departments); me = await Store.me(); UI.toast('Org structure saved', 'success'); renderNav(); draw(); }
+        catch (e) { UI.toast('Could not save: ' + e.message, 'error'); }
+      });
+    };
+    draw();
+  }
+
+  // ---------- Users / HODs (master) ----------
+  async function renderUsers() {
+    let users = [], org;
+    try { [users, org] = await Promise.all([Store.listUsers(), Store.getOrg()]); } catch (e) { view.innerHTML = `<div class="empty"><h3>Could not load</h3><p>${esc(e.message)}</p></div>`; return; }
+    const dn = (id) => (org.departments.find((x) => x.id === id) || {}).name || id;
+    view.innerHTML = `
+      <div class="page-head"><div><h1>Users (HODs)</h1><p>Heads of departments who can sign in to review their own candidates · ${users.length} user${users.length === 1 ? '' : 's'}</p></div>
+        <div class="actions"><button class="btn btn-primary btn-sm" id="newUser">${I('plus', 15)} New user</button></div></div>
+      <div class="table-wrap">${users.length ? `<table class="tbl"><thead><tr><th>Name</th><th>Email</th><th>Departments</th><th>Status</th><th style="text-align:right">Action</th></tr></thead><tbody>
+        ${users.map((u) => `<tr><td><div class="td-cand"><div class="av" style="background:${avColor(u.name)}">${initials(u.name)}</div><div><b>${esc(u.name)}</b></div></div></td><td>${esc(u.email)}</td>
+          <td>${u.departmentIds.length ? u.departmentIds.map((id) => `<span class="badge b-info" style="margin-right:4px">${esc(dn(id))}</span>`).join('') : '<span style="color:var(--muted)">None</span>'}</td>
+          <td><span class="badge ${u.active ? 'b-good' : 'b-neutral'}">${u.active ? 'Active' : 'Disabled'}</span></td>
+          <td style="text-align:right;white-space:nowrap"><button class="btn btn-outline btn-sm" data-edit="${u.id}">${I('settings', 14)} Edit</button> <button class="btn btn-outline btn-sm" data-rm="${u.id}" title="Delete">${I('trash', 14)}</button></td></tr>`).join('')}
+      </tbody></table>` : `<div class="empty"><div class="ei">${I('people', 24)}</div><h3>No HODs yet</h3><p>Create a user and assign their departments.</p></div>`}</div>`;
+    $('#newUser').addEventListener('click', () => openUserModal(null, org, renderUsers));
+    $$('[data-edit]').forEach((b) => b.addEventListener('click', () => openUserModal(users.find((u) => u.id === b.dataset.edit), org, renderUsers)));
+    $$('[data-rm]').forEach((b) => b.addEventListener('click', async () => {
+      const u = users.find((x) => x.id === b.dataset.rm);
+      if (!confirm('Delete ' + u.name + '? They will no longer be able to sign in.')) return;
+      try { await Store.deleteUser(u.id); UI.toast('User deleted', 'success'); renderUsers(); } catch (e) { UI.toast(e.message, 'error'); }
+    }));
+  }
+  function openUserModal(u, org, done) {
+    const gen = () => { const c = 'abcdefghjkmnpqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789'; const a = new Uint32Array(12); crypto.getRandomValues(a); return Array.from(a, (n) => c[n % c.length]).join(''); };
+    modal(`
+      <div class="m-head"><div class="m-ico brand">${I('people', 20)}</div><div><h3>${u ? 'Edit user' : 'New user (HOD)'}</h3><p>${u ? esc(u.email) : 'They sign in at this same admin page'}</p></div></div>
+      <div class="m-body">
+        <label class="fld"><span>Full name</span><input class="inp" id="uName" value="${esc(u ? u.name : '')}" placeholder="e.g. Hafeez Ahmed"></label>
+        <label class="fld"><span>Email (login)</span><input class="inp" id="uEmail" type="email" value="${esc(u ? u.email : '')}" placeholder="name@dvago.com"></label>
+        <label class="fld"><span>${u ? 'New password (leave empty to keep)' : 'Password (min 8 characters)'}</span><div style="display:flex;gap:8px"><input class="inp" id="uPass" style="flex:1" value="${u ? '' : gen()}"><button type="button" class="btn btn-outline btn-sm" id="uGen">Generate</button></div></label>
+        <div class="fld"><span>Departments</span><div class="slot-chips" id="uDeps">${org.departments.map((x) => `<button type="button" class="slot-chip ${u && u.departmentIds.includes(x.id) ? 'on' : ''}" data-id="${esc(x.id)}">${esc(x.name)}</button>`).join('') || 'No departments yet. Create them in the Org structure tab.'}</div></div>
+        ${u ? `<label class="fld" style="flex-direction:row;gap:8px;align-items:center"><input type="checkbox" id="uActive" ${u.active ? 'checked' : ''}> <span>Account active</span></label>` : ''}
+      </div>
+      <div class="m-foot"><button class="btn btn-outline" data-dismiss>Cancel</button><button class="btn btn-primary" id="uSave">${I('check', 15)} ${u ? 'Save' : 'Create user'}</button></div>`);
+    $$('#uDeps .slot-chip').forEach((b) => b.addEventListener('click', () => b.classList.toggle('on')));
+    $('#uGen').addEventListener('click', () => { $('#uPass').value = gen(); });
+    $('#uSave').addEventListener('click', async () => {
+      const body = { name: $('#uName').value.trim(), email: $('#uEmail').value.trim(), departmentIds: $$('#uDeps .slot-chip.on').map((b) => b.dataset.id) };
+      const pw = $('#uPass').value; if (pw) body.password = pw;
+      if (u) body.active = $('#uActive').checked;
+      if (!body.name || !body.email) return UI.toast('Name and email are required', 'error');
+      if (!u && pw.length < 8) return UI.toast('Password must be at least 8 characters', 'error');
+      try {
+        if (u) await Store.updateUser(u.id, body); else await Store.createUser(body);
+      } catch (e) { return UI.toast(e.message, 'error'); }
+      if (!u || body.password) {
+        $('#mCard').innerHTML = `<div class="m-head"><div class="m-ico brand">${I('check', 20)}</div><div><h3>${u ? 'Password updated' : 'User created'}</h3><p>Share these login details with ${esc(body.name)} (the password is not shown again)</p></div></div>
+          <div class="invite-success"><div class="invite-url"><input readonly id="uCred" value="${esc(body.email + '  /  ' + body.password)}"><button class="btn btn-primary btn-sm" id="uCopy">${I('copy', 13)} Copy</button></div></div>
+          <div class="m-foot"><button class="btn btn-primary" data-dismiss>Done</button></div>`;
+        $('#uCopy').addEventListener('click', () => { navigator.clipboard.writeText($('#uCred').value).then(() => UI.toast('Copied', 'success')); });
+        attachModalCloses(); done();
+      } else { closeModal(); UI.toast('User updated', 'success'); done(); }
+    });
+  }
+  function openMyPassword() {
+    modal(`
+      <div class="m-head"><div class="m-ico brand">${I('shield', 20)}</div><div><h3>Change password</h3><p>${esc(me.email)}</p></div></div>
+      <div class="m-body">
+        <label class="fld"><span>Current password</span><input class="inp" id="pCur" type="password"></label>
+        <label class="fld"><span>New password (min 8 characters)</span><input class="inp" id="pNew" type="password"></label>
+      </div>
+      <div class="m-foot"><button class="btn btn-outline" data-dismiss>Cancel</button><button class="btn btn-primary" id="pSave">Save</button></div>`);
+    $('#pSave').addEventListener('click', async () => {
+      try { await Store.changeMyPassword($('#pCur').value, $('#pNew').value); closeModal(); UI.toast('Password changed', 'success'); }
+      catch (e) { UI.toast(e.message, 'error'); }
+    });
+  }
+
   // ---------- Invites ----------
   async function renderInvites() {
     let invs = []; try { invs = await Store.listInvites(); } catch (e) {}
@@ -1057,7 +1185,7 @@
       <div class="m-body">
         <label class="fld"><span>Candidate name</span><input class="inp" id="iName" placeholder="e.g. Ayesha Khan"></label>
         <label class="fld"><span>Email</span><input class="inp" id="iEmail" type="email" placeholder="candidate@email.com"></label>
-        <label class="fld"><span>Role</span><select class="inp" id="iRole"><option value="">Let the candidate choose</option>${Object.entries(B.ROLES).map(([k, r]) => `<option value="${k}">${esc(r.title)}</option>`).join('')}</select></label>
+        <label class="fld"><span>Role</span><select class="inp" id="iRole">${isMaster() ? '<option value="">Let the candidate choose</option>' : ''}${myRoleEntries().map(([k, r]) => `<option value="${k}">${esc(r.title)}</option>`).join('')}</select></label>
         <label class="fld"><span>Expires on (optional)</span><input class="inp" id="iExp" type="date"></label>
       </div>
       <div class="m-foot"><button class="btn btn-outline" data-dismiss>Cancel</button><button class="btn btn-primary" id="iCreate">${I('send', 15)} Create link</button></div>
@@ -1569,7 +1697,7 @@
     });
     $('#bClear').addEventListener('click', () => {
       modal(`<div class="m-head"><div class="m-ico bad">${I('alert', 20)}</div><div><h3>Clear everything?</h3><p>This will permanently delete all candidates, submissions and invitations. This cannot be undone.</p></div></div><div class="m-foot"><button class="btn btn-outline" data-dismiss>Cancel</button><button class="btn btn-danger" id="confClear">Yes, clear all</button></div>`);
-      $('#confClear').addEventListener('click', async () => { await Store.clearAll(); data = []; UI.toast('All data cleared', 'success'); closeModal(); switchTab('dashboard'); });
+      $('#confClear').addEventListener('click', async () => { await Store.clearAll(); allData = []; data = []; UI.toast('All data cleared', 'success'); closeModal(); switchTab('dashboard'); });
       attachModalCloses();
     });
   }
@@ -1590,7 +1718,7 @@
     if (!window.DVAGO_DEMO) return;
     const r = await window.DVAGO_DEMO.seed();
     UI.toast(r.created ? `Loaded ${r.created} demo candidates` : 'Data already exists', 'success');
-    data = await Store.listSubmissions();
+    await loadData();
     render();
   }
 
