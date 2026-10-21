@@ -340,3 +340,8 @@ textarea.inp { padding: 12px 14px; height: auto; min-height: 80px; resize: verti
 #sTimes .slot-chip { flex-direction: row; }
 .slot-sum { padding: 12px 14px; border-radius: 10px; background: var(--surface-2); border: 1px dashed var(--line-2); font-size: 14px; color: var(--ink-2); display: flex; align-items: center; gap: 8px; }
 .rv-row { cursor: default; }
+
+/* Department switcher (HOD / master) */
+.dept-switch { display: flex; align-items: center; gap: 8px; margin: 0 0 12px; padding: 9px 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface, #fff); font-size: 13px; font-weight: 600; color: var(--text, inherit); }
+.dept-switch select { flex: 1; min-width: 0; border: 0; background: transparent; font: inherit; color: inherit; outline: none; cursor: pointer; }
+.dept-switch.one span { flex: 1; }
