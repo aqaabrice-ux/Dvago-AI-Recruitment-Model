@@ -121,6 +121,7 @@
       { k: 'inbox', ico: 'bell', label: 'Inbox', cnt: newCount || null },
       { k: 'review', ico: 'award', label: 'Recommended', cnt: pendingReviewCount() || null },
       { k: 'applications', ico: 'file', label: 'Applications', server: true },
+      { k: 'hierarchy', ico: 'store', label: 'Hierarchy', server: true },
       { k: 'invites', ico: 'send', label: 'Invitations' },
       { k: 'analytics', ico: 'chart', label: 'Analytics' },
       { k: 'positions', ico: 'target', label: 'Positions & JDs', master: true },
@@ -164,6 +165,7 @@
       inbox: renderInbox,
       review: renderReview,
       applications: renderApplications,
+      hierarchy: renderHierarchy,
       invites: renderInvites,
       analytics: renderAnalytics,
       positions: renderPositions,
@@ -1180,6 +1182,105 @@
     $$('[data-copy]').forEach((b) => b.addEventListener('click', () => { navigator.clipboard.writeText(b.dataset.copy); UI.toast('Link copied', 'success'); }));
     $$('[data-del]').forEach((b) => b.addEventListener('click', async () => { await Store.deleteInvite(b.dataset.del); UI.toast('Invitation removed', 'success'); render(); }));
   }
+  // ---------- Team hierarchy ----------
+  // HODs see the structure of their own departments (read-only). The master sees everything and can edit: add / edit / remove people and mark a position Vacant.
+  let hierData = null;
+  function hierRank(d) {
+    const t = String(d || '').toLowerCase();
+    if (/^head\b|head of/.test(t)) return 0;
+    if (/senior manager/.test(t)) return 1;
+    if (/associate manager/.test(t)) return 3;
+    if (/deputy manager/.test(t)) return 4;
+    if (/assistant manager/.test(t)) return 5;
+    if (/manager/.test(t)) return 2;
+    if (/senior executive/.test(t)) return 6;
+    if (/executive/.test(t)) return 7;
+    if (/officer/.test(t)) return 8;
+    if (/intern|trainee/.test(t)) return 11;
+    if (/rider|driver|cleaner|loader|porter|gate ?keeper|office boy/.test(t)) return 10;
+    return 9;
+  }
+  async function renderHierarchy(refetch) {
+    if (!hierData || refetch !== false) { try { hierData = await Store.getHierarchy(); } catch (e) { view.innerHTML = `<div class="empty"><h3>Could not load the hierarchy</h3><p>${esc(e.message || '')}</p></div>`; return; } }
+    const H = hierData, M = !!H.canEdit;
+    const f = state.hier = state.hier || { q: '', status: '' };
+    const q = f.q.trim().toLowerCase();
+    const depts = H.departments.filter((d) => !state.dept || d.id === state.dept);
+    const all = depts.flatMap((d) => d.members);
+    const nAct = all.filter((x) => x.status !== 'Vacant').length, nVac = all.length - nAct;
+    const match = (x) => (!f.status || (f.status === 'Vacant') === (x.status === 'Vacant')) && (!q || (x.name + ' ' + x.designation + ' ' + (x.vacatedName || '')).toLowerCase().includes(q));
+    const card = (x, head) => {
+      const vac = x.status === 'Vacant';
+      return `<div class="h-card ${vac ? 'vac' : ''} ${head ? 'head' : ''}">
+        <div class="av" style="background:${vac ? 'var(--line-2)' : avColor(x.name)}">${vac ? '?' : initials(x.name)}</div>
+        <div class="h-meta"><b>${vac ? 'Vacant position' : esc(x.name)}</b><span>${esc(x.designation)}</span>${vac && x.vacatedName ? `<small>Previously: ${esc(x.vacatedName)}</small>` : ''}</div>
+        <span class="badge ${vac ? 'b-bad' : 'b-good'}">${vac ? 'Vacant' : 'Active'}</span>
+        ${M ? `<div class="h-act"><button class="btn btn-outline btn-sm" data-hedit="${esc(x.id)}">Edit</button><button class="btn btn-outline btn-sm" data-hvac="${esc(x.id)}">${vac ? 'Fill' : 'Vacate'}</button><button class="btn btn-outline btn-sm" data-hdel="${esc(x.id)}" aria-label="Remove">${I('trash', 13)}</button></div>` : ''}
+      </div>`;
+    };
+    const block = (d) => {
+      const list = d.members.filter(match);
+      const head = list.filter((x) => x.isHead);
+      const groups = {};
+      list.filter((x) => !x.isHead).forEach((x) => { (groups[x.designation] = groups[x.designation] || []).push(x); });
+      const keys = Object.keys(groups).sort((a, b) => hierRank(a) - hierRank(b) || a.localeCompare(b));
+      const act = d.members.filter((x) => x.status !== 'Vacant').length;
+      return `<div class="panel h-dept"><div class="panel-head"><div><h3>${esc(d.name)}</h3><div class="sub">HOD: ${d.hods.length ? d.hods.map(esc).join(', ') : '<i>no HOD account yet</i>'} · ${d.members.length} positions · ${act} active · ${d.members.length - act} vacant</div></div>${M ? `<button class="btn btn-primary btn-sm" data-hadd="${esc(d.id)}">${I('plus', 14)} Add</button>` : ''}</div>
+        <div class="panel-body">
+          ${head.length ? `<div class="h-head">${head.map((x) => card(x, true)).join('')}</div>` : ''}
+          ${keys.map((k) => `<div class="h-group"><div class="h-gt">${esc(k)} <span>${groups[k].length}</span></div><div class="h-grid">${groups[k].map((x) => card(x, false)).join('')}</div></div>`).join('')}
+          ${!list.length ? `<p class="muted" style="margin:8px 0">${d.members.length ? 'No one matches this filter.' : 'No team members yet.' + (M ? ' Use Add to create the first one.' : '')}</p>` : ''}
+        </div></div>`;
+    };
+    view.innerHTML = `<div class="page-head"><div><h1>Team hierarchy</h1><p>${M ? 'Structure of every department. You can edit it.' : 'Structure of your department(s).'} · ${all.length} positions · ${nAct} active · ${nVac} vacant</p></div></div>
+      <div class="h-tools"><input class="inp" id="hQ" placeholder="Search name or designation" value="${esc(f.q)}" style="max-width:300px">
+        ${[['', 'All'], ['Active', 'Active'], ['Vacant', 'Vacant']].map(([k, l]) => `<button class="btn btn-sm ${f.status === k ? 'btn-primary' : 'btn-outline'}" data-hs="${k}">${l}</button>`).join('')}</div>
+      ${depts.length ? depts.map(block).join('') : `<div class="empty"><h3>No hierarchy to show</h3><p>${M ? 'Pick a department or add people.' : 'No department is assigned to your account yet.'}</p></div>`}`;
+    const qEl = $('#hQ');
+    if (qEl) qEl.addEventListener('input', () => { f.q = qEl.value; const p = qEl.selectionStart; renderHierarchy(false).then(() => { const e = $('#hQ'); if (e) { e.focus(); try { e.setSelectionRange(p, p); } catch (_) {} } }); });
+    $$('[data-hs]').forEach((b) => b.addEventListener('click', () => { f.status = b.dataset.hs; renderHierarchy(false); }));
+    if (!M) return;
+    const find = (id) => all.find((x) => x.id === id);
+    const refresh = async (msg) => { if (msg) UI.toast(msg, 'success'); closeModal(); await renderHierarchy(true); };
+    $$('[data-hadd]').forEach((b) => b.addEventListener('click', () => openMemberModal(null, b.dataset.hadd, H, refresh)));
+    $$('[data-hedit]').forEach((b) => b.addEventListener('click', () => openMemberModal(find(b.dataset.hedit), null, H, refresh)));
+    $$('[data-hvac]').forEach((b) => b.addEventListener('click', async () => {
+      const x = find(b.dataset.hvac); if (!x) return;
+      if (x.status === 'Vacant') return openMemberModal(x, null, H, refresh, true);
+      try { await Store.updateMember(x.id, { status: 'Vacant' }); await refresh(x.name + ' marked vacant'); } catch (e) { UI.toast(e.message, 'error'); }
+    }));
+    $$('[data-hdel]').forEach((b) => b.addEventListener('click', () => {
+      const x = find(b.dataset.hdel); if (!x) return;
+      modal(`<div class="m-head"><div class="m-ico bad">${I('alert', 20)}</div><div><h3>Remove this position?</h3><p>${esc(x.name || 'Vacant position')} · ${esc(x.designation)}. To keep the position but empty it, use Vacate instead.</p></div></div><div class="m-foot"><button class="btn btn-outline" data-dismiss>Cancel</button><button class="btn btn-danger" id="hDelOk">Remove</button></div>`);
+      $('#hDelOk').addEventListener('click', async () => { try { await Store.deleteMember(x.id); await refresh('Removed'); } catch (e) { UI.toast(e.message, 'error'); } });
+      attachModalCloses();
+    }));
+  }
+  function openMemberModal(x, deptId, H, refresh, fillOnly) {
+    const isNew = !x;
+    const desigs = [...new Set(H.departments.flatMap((d) => d.members.map((m) => m.designation)))].sort();
+    modal(`<div class="m-head"><div class="m-ico brand">${I('people', 20)}</div><div><h3>${fillOnly ? 'Fill vacant position' : isNew ? 'Add team member' : 'Edit team member'}</h3><p>${fillOnly ? esc(x.designation) : 'Changes are visible to the department HOD straight away'}</p></div></div>
+      <div class="m-body">
+        <label class="fld"><span>Name</span><input class="inp" id="hmName" value="${esc(x && x.status !== 'Vacant' ? x.name : '')}" placeholder="Full name"></label>
+        ${fillOnly ? '' : `<label class="fld"><span>Designation</span><input class="inp" id="hmDes" list="hmDesList" value="${esc(x ? x.designation : '')}" placeholder="e.g. Assistant Manager"><datalist id="hmDesList">${desigs.map((d) => `<option value="${esc(d)}">`).join('')}</datalist></label>
+        <label class="fld"><span>Department</span><select class="inp" id="hmDept">${H.departments.map((d) => `<option value="${esc(d.id)}" ${(x ? x.deptId : deptId) === d.id ? 'selected' : ''}>${esc(d.name)}</option>`).join('')}</select></label>
+        <label class="fld"><span>Status</span><select class="inp" id="hmStatus"><option value="Active" ${!x || x.status !== 'Vacant' ? 'selected' : ''}>Active</option><option value="Vacant" ${x && x.status === 'Vacant' ? 'selected' : ''}>Vacant (position open, no name)</option></select></label>
+        <label class="fld" style="flex-direction:row;gap:8px;align-items:center"><input type="checkbox" id="hmHead" ${x && x.isHead ? 'checked' : ''}> <span>Head of this department</span></label>`}
+      </div>
+      <div class="m-foot"><button class="btn btn-outline" data-dismiss>Cancel</button><button class="btn btn-primary" id="hmSave">${I('check', 15)} Save</button></div>`);
+    $('#hmSave').addEventListener('click', async () => {
+      const name = $('#hmName').value.trim();
+      try {
+        if (fillOnly) { if (!name) return UI.toast('Please enter the name', 'error'); await Store.updateMember(x.id, { name, status: 'Active' }); return refresh(name + ' added to the position'); }
+        const body = { name, designation: $('#hmDes').value.trim(), deptId: $('#hmDept').value, status: $('#hmStatus').value, isHead: $('#hmHead').checked };
+        if (body.status === 'Vacant') delete body.name;
+        if (isNew) await Store.addMember(body); else await Store.updateMember(x.id, body);
+        await refresh(isNew ? 'Added' : 'Saved');
+      } catch (e) { UI.toast(e.message || 'Failed', 'error'); }
+    });
+    attachModalCloses();
+  }
+
   // ---------- Applications (resume screening) ----------
   async function renderApplications() {
     let apps = []; try { apps = await Store.listApplications(); } catch (e) { console.error(e); }
