@@ -365,3 +365,69 @@ textarea.inp { padding: 12px 14px; height: auto; min-height: 80px; resize: verti
 .h-act { display: flex; gap: 6px; width: 100%; padding-top: 6px; }
 .h-act .btn { flex: 1; }
 .h-act .btn:last-child { flex: none; }
+
+/* ---- Org structure: tree (company > department > head + designation branches > people) ---- */
+.seg { display: inline-flex; gap: 6px; }
+.otree { overflow-x: auto; padding: 6px 2px 26px; }
+.otree ul { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 12px; }
+.otree li { position: relative; display: flex; align-items: flex-start; gap: 30px; }
+.otree li > ul { padding-top: 0; }
+.otree .ot-root > li { gap: 30px; }
+/* connectors: a trunk at the middle of each 30px gap, a stub into every child, a stub out of every parent */
+.otree li li::before { content: ''; position: absolute; left: -15px; top: 0; bottom: -12px; border-left: 2px solid var(--line-2); }
+.otree li li:first-child::before { top: 22px; }
+.otree li li:last-child::before { bottom: auto; height: 22px; }
+.otree li li:only-child::before { display: none; }
+.otree li li::after { content: ''; position: absolute; left: -15px; top: 22px; width: 15px; border-top: 2px solid var(--line-2); }
+.otree li:has(> ul) > .ot-n { position: relative; }
+.otree li:has(> ul) > .ot-n::after { content: ''; position: absolute; right: -15px; top: 22px; width: 15px; border-top: 2px solid var(--line-2); }
+.ot-n { flex: none; min-height: 44px; padding: 6px 10px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); display: flex; flex-direction: column; gap: 4px; justify-content: center; max-width: 300px; }
+.ot-n.root { background: var(--brand-pale); border-color: var(--brand-dark); min-width: 170px; }
+.ot-n.dept { min-width: 230px; border-color: var(--line-2); box-shadow: 0 1px 0 rgba(0, 0, 0, .03); }
+.ot-n.grp { padding: 4px 8px; min-height: 44px; }
+.ot-n.head { background: var(--brand-pale); border-color: var(--brand-dark); padding: 4px 6px; }
+.ot-n.empty-n { color: var(--muted); font-size: 13px; border-style: dashed; }
+.ot-g { display: flex; align-items: center; gap: 8px; border: 0; background: transparent; font: inherit; color: var(--ink); cursor: pointer; padding: 4px 2px; text-align: left; }
+.ot-g b { font-size: 14px; }
+.ot-g em { font-style: normal; font-size: 11px; background: var(--surface-2); border: 1px solid var(--line); border-radius: 999px; padding: 0 8px; color: var(--muted); }
+.ot-caret { display: grid; place-items: center; transition: transform .15s; color: var(--muted); }
+.ot-caret.open { transform: rotate(90deg); }
+.ot-sub { font-size: 12px; color: var(--muted); padding: 0 2px; }
+.ot-stats { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; padding: 2px 0 2px 2px; }
+.ot-people { display: flex; flex-wrap: wrap; gap: 6px; max-width: 560px; padding: 2px 0; }
+.ot-p { display: inline-flex; align-items: center; gap: 8px; max-width: 250px; padding: 5px 10px 5px 5px; border: 1px solid var(--line); border-radius: 999px; background: var(--surface); font: inherit; color: var(--ink); cursor: pointer; text-align: left; }
+.ot-p:hover { border-color: var(--brand-dark); background: var(--brand-pale); }
+.ot-p.vac { border-style: dashed; background: var(--surface-2); color: var(--muted); }
+.ot-p.head { border-radius: 12px; }
+.ot-p .av { width: 26px; height: 26px; border-radius: 50%; display: grid; place-items: center; color: #fff; font-weight: 700; font-size: 10.5px; flex: none; font-style: normal; }
+.ot-p span { display: flex; flex-direction: column; min-width: 0; line-height: 1.2; }
+.ot-p b { font-size: 12.5px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ot-p small { font-size: 11px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+@media (max-width: 720px) { .ot-n { max-width: 220px; } .ot-people { max-width: 300px; } .otree li { gap: 22px; } }
+
+/* ---- Recommended (Round 2) cards ---- */
+.rv-list { display: flex; flex-direction: column; gap: 12px; }
+.rv-card { border: 1px solid var(--line); border-radius: 14px; background: var(--surface); padding: 14px 16px; display: flex; flex-direction: column; gap: 12px; }
+.rv-main { display: grid; grid-template-columns: minmax(210px, 1.3fr) minmax(120px, 1fr) minmax(150px, .9fr) minmax(110px, .7fr) minmax(190px, 1.2fr); gap: 14px 18px; align-items: start; }
+.rv-main small { display: block; font-size: 11px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); margin-bottom: 3px; }
+.rv-main b { font-size: 14px; }
+.rv-main .rv-c2 span { display: block; font-size: 12.5px; color: var(--muted); }
+.rv-sc { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.rv-note { font-size: 12px; color: var(--muted); margin-top: 4px; }
+.rv-note.bad { color: var(--bad); }
+.rv-actions { display: flex; flex-wrap: wrap; gap: 8px; justify-content: flex-end; padding-top: 12px; border-top: 1px solid var(--line); }
+@media (max-width: 1100px) { .rv-main { grid-template-columns: 1fr 1fr; } .rv-c1 { grid-column: 1 / -1; } }
+
+/* ---- Interview feedback + offer ---- */
+.fb-main { grid-template-columns: minmax(210px, 1.2fr) minmax(130px, .9fr) minmax(150px, .9fr) minmax(240px, 1.6fr) minmax(170px, 1fr); }
+.fb-r { font-size: 12.5px; margin-bottom: 6px; }
+.fb-r small { color: var(--muted); }
+.fb-t { color: var(--ink-2); font-size: 12.5px; margin-top: 2px; }
+.fb-crit { display: flex; flex-direction: column; gap: 8px; }
+.fb-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 8px 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface-2); flex-wrap: wrap; }
+.fb-row small { display: block; color: var(--muted); font-size: 12px; }
+.fb-pick { display: flex; gap: 6px; }
+.fb-pick .slot-chip { min-width: 40px; justify-content: center; }
+.fb-rec { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+.fb-rec .slot-chip { flex-direction: column; align-items: flex-start; gap: 2px; font-size: 12px; text-align: left; }
+@media (max-width: 1100px) { .fb-main { grid-template-columns: 1fr 1fr; } .fb-rec { grid-template-columns: 1fr; } }
