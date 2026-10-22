@@ -181,6 +181,12 @@
       async applicationAction(id, action) { await init(); return api('applications/' + encodeURIComponent(id) + '/' + action, { method: 'POST', body: {} }); },
       async deleteApplication(id) { await init(); return api('applications/' + encodeURIComponent(id), { method: 'DELETE' }); },
 
+      // ----- team hierarchy (server mode only) -----
+      async getHierarchy() { await init(); if (mode !== 'server') return { canEdit: false, departments: [] }; return api('hierarchy'); },
+      async addMember(body) { await init(); return api('hierarchy', { method: 'POST', body }); },
+      async updateMember(id, body) { await init(); return api('hierarchy/' + encodeURIComponent(id), { method: 'PATCH', body }); },
+      async deleteMember(id) { await init(); return api('hierarchy/' + encodeURIComponent(id), { method: 'DELETE' }); },
+
       // ----- submissions -----
       async hasCompleted(email, role) {
         await init();
