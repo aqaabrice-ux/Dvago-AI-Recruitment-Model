@@ -120,6 +120,7 @@
       { k: 'candidates', ico: 'people', label: 'Candidates', cnt: n },
       { k: 'inbox', ico: 'bell', label: 'Inbox', cnt: newCount || null },
       { k: 'review', ico: 'award', label: 'Recommended', cnt: pendingReviewCount() || null },
+      { k: 'applications', ico: 'file', label: 'Applications', server: true },
       { k: 'invites', ico: 'send', label: 'Invitations' },
       { k: 'analytics', ico: 'chart', label: 'Analytics' },
       { k: 'positions', ico: 'target', label: 'Positions & JDs', master: true },
@@ -162,6 +163,7 @@
       candidates: renderCandidates,
       inbox: renderInbox,
       review: renderReview,
+      applications: renderApplications,
       invites: renderInvites,
       analytics: renderAnalytics,
       positions: renderPositions,
@@ -214,7 +216,7 @@
 
   function openPositionEditor(pos) {
     const isNew = !pos;
-    pos = pos || { title: '', roleKey: 'front-staff', jd: '', isActive: true };
+    pos = pos || { title: '', roleKey: Object.keys(B.ROLES)[0], jd: '', isActive: true };
     const placeholder = `About the role\nWhat the person does, and why it matters at DVAGO.\n\nKey responsibilities\n• First responsibility\n• Second responsibility\n• Third responsibility\n\nWhat we are looking for\n• Required education / experience\n• Must-have skills\n• Nice-to-have skills\n\nWhat you'll get\n• Salary / benefit 1\n• Salary / benefit 2`;
     modal(`<div class="m-head"><div class="m-ico brand">${I('target', 20)}</div><div><h3>${isNew ? 'New' : 'Edit'} position</h3><p>${isNew ? 'Create a new specific position candidates can apply for' : 'Update this position — changes show up to candidates immediately'}</p></div></div>
       <div class="m-body">
@@ -254,7 +256,7 @@
 
   // ---------- Voice questions CRUD ----------
   async function renderVoiceQuestions() {
-    const roleKey = state.vqRole || 'front-staff';
+    const roleKey = state.vqRole || Object.keys(B.ROLES)[0];
     let items = [];
     try { items = await Store.listVoiceQuestions(roleKey); } catch (e) { items = []; }
     if (!Array.isArray(items)) items = [];
@@ -1178,6 +1180,74 @@
     $$('[data-copy]').forEach((b) => b.addEventListener('click', () => { navigator.clipboard.writeText(b.dataset.copy); UI.toast('Link copied', 'success'); }));
     $$('[data-del]').forEach((b) => b.addEventListener('click', async () => { await Store.deleteInvite(b.dataset.del); UI.toast('Invitation removed', 'success'); render(); }));
   }
+  // ---------- Applications (resume screening) ----------
+  async function renderApplications() {
+    let apps = []; try { apps = await Store.listApplications(); } catch (e) { console.error(e); }
+    const f = state.appFilter || 'all';
+    const cnt = (s) => apps.filter((a) => a.status === s).length;
+    const stBadge = (a) => ({ Shortlisted: 'b-good', Review: 'b-warn', 'Not shortlisted': 'b-bad', Screening: 'b-info' }[a.status] || 'b-neutral');
+    const shown = apps.filter((a) => f === 'all' || a.status === f);
+    const scoreBar = (a) => a.score == null
+      ? `<span class="muted" title="${esc((a.screen && a.screen.error) || '')}">n/a</span>`
+      : `<div style="display:flex;align-items:center;gap:8px;min-width:110px"><b style="width:30px">${a.score}</b><div style="flex:1;height:6px;border-radius:4px;background:var(--line,#e6ebe1)"><div style="height:100%;width:${a.score}%;border-radius:4px;background:${a.score >= 60 ? 'var(--good,#3f9b3f)' : a.score >= 55 ? 'var(--warn,#d9a21b)' : 'var(--bad,#c9473e)'}"></div></div></div>`;
+    const tabs = [['all', 'All', apps.length], ['Review', 'Needs HR review', cnt('Review')], ['Shortlisted', 'Shortlisted', cnt('Shortlisted')], ['Not shortlisted', 'Not shortlisted', cnt('Not shortlisted')]];
+    view.innerHTML = `<div class="page-head"><div><h1>Applications</h1><p>Resumes are scored against the job description. Only shortlisted candidates receive the interview link · ${apps.length} total</p></div></div>
+      <div class="chips" style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px">${tabs.map(([k, l, n]) => `<button class="btn btn-sm ${f === k ? 'btn-primary' : 'btn-outline'}" data-af="${esc(k)}">${esc(l)} <span style="opacity:.7">${n}</span></button>`).join('')}</div>
+      <div class="table-wrap">${shown.length ? `<table class="tbl"><thead><tr><th>Candidate</th><th>Position</th><th>Score</th><th>Status</th><th>Applied</th><th></th></tr></thead><tbody>
+        ${shown.map((a) => `<tr>
+          <td><div class="td-cand"><div class="av" style="background:${avColor(a.name)}">${initials(a.name)}</div><div><b>${esc(a.name)}</b><span>${esc(a.email)}</span></div></div></td>
+          <td>${esc(a.positionTitle || B.ROLES[a.role]?.title || '')}<br><span class="muted" style="font-size:12px">${a.positionTitle ? esc(B.ROLES[a.role]?.title || '') : (a.screen && a.screen.bestPosition ? 'Best fit: ' + esc(a.screen.bestPosition) : 'Department')}</span></td>
+          <td>${scoreBar(a)}</td>
+          <td><span class="badge ${stBadge(a)}">${esc(a.status)}</span>${a.decision ? `<br><span class="muted" style="font-size:11.5px">${esc(a.decision.what)}</span>` : ''}${a.allowReapply ? '<br><span class="muted" style="font-size:11.5px">Can re-apply</span>' : ''}</td>
+          <td>${dt(a.createdAt)}</td>
+          <td><button class="btn btn-outline btn-sm" data-ap="${esc(a.id)}">${I('eye', 13)} Open</button></td>
+        </tr>`).join('')}</tbody></table>` : `<div class="empty"><div class="ei">${I('people', 24)}</div><h3>No applications here</h3><p>New applicants appear after they submit the apply form.</p></div>`}</div>`;
+    $$('[data-af]').forEach((b) => b.addEventListener('click', () => { state.appFilter = b.dataset.af; renderApplications(); }));
+    $$('[data-ap]').forEach((b) => b.addEventListener('click', () => openApplication(apps.find((a) => a.id === b.dataset.ap))));
+  }
+  function openApplication(a) {
+    if (!a) return;
+    const s = a.screen || {}, p = a.profile || {};
+    const part = (l, v, max) => `<div style="display:flex;justify-content:space-between;font-size:13px;padding:3px 0"><span>${l}</span><b>${v == null ? '-' : v} / ${max}</b></div>`;
+    const li = (arr) => (arr && arr.length ? `<ul style="margin:4px 0 0 18px;padding:0;font-size:13px">${arr.map((x) => `<li>${esc(x)}</li>`).join('')}</ul>` : '<span class="muted" style="font-size:13px">-</span>');
+    modal(`
+      <div class="m-head"><div class="m-ico brand">${I('people', 20)}</div><div><h3>${esc(a.name)}</h3><p>${esc(a.positionTitle || (B.ROLES[a.role]?.title || '') + ' (department)')}${a.screen && a.screen.bestPosition ? ' · best fit: ' + esc(a.screen.bestPosition) : ''} · ${esc(a.email)} · ${esc(p.phone || '')} · via ${a.source === 'form' ? 'Google Form' : 'apply page'}</p></div></div>
+      <div class="m-body" style="max-height:62vh;overflow:auto">
+        <div style="display:flex;gap:18px;align-items:center;margin-bottom:10px"><div style="font-size:34px;font-weight:800">${a.score == null ? 'n/a' : a.score + '%'}</div><div><span class="badge">${esc(a.status)}</span>${a.decision ? `<div class="muted" style="font-size:12px;margin-top:4px">${esc(a.decision.what)}</div>` : ''}</div></div>
+        ${s.error ? `<div class="rel-warn" style="margin-bottom:10px">${I('alert', 16)}<div><b>AI could not score this resume</b><span>${esc(s.error)}. Please read the resume and decide.</span></div></div>` : ''}
+        ${s.summary ? `<p style="font-size:13.5px;margin:0 0 10px">${esc(s.summary)}</p>` : ''}
+        ${s.parts ? `<div style="border:1px solid var(--line,#e6ebe1);border-radius:10px;padding:8px 12px;margin-bottom:10px">${part('Skills vs JD', s.parts.skills, 40)}${part('Relevant experience', s.parts.experience, 30)}${part('Education / licences', s.parts.education, 15)}${part('Industry fit', s.parts.domain, 15)}</div>` : ''}
+        ${s.parts ? `<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px"><div><b style="font-size:13px">Matches</b>${li(s.matched)}</div><div><b style="font-size:13px">Gaps</b>${li(s.gaps)}</div></div>` : ''}
+        <div style="margin-top:12px;font-size:13px;display:grid;grid-template-columns:1fr 1fr;gap:4px 14px">
+          <span>City: <b>${esc(p.city || '-')}</b></span><span>Experience: <b>${esc(p.experience || '-')}</b></span>
+          <span>Education: <b>${esc(p.education || '-')}</b></span><span>Employer: <b>${esc(p.employer || '-')}</b></span>
+          <span>Expected salary: <b>${esc(p.expectedSalary || '-')}</b></span><span>Resume text: <b>${a.resume ? esc(a.resume.textSource || '') + ' · ' + a.resume.chars + ' chars' : '-'}</b></span>
+        </div>
+      </div>
+      <div class="m-foot" style="flex-wrap:wrap;gap:8px">
+        <button class="btn btn-outline" id="apRes">${I('download', 14)} Resume</button>
+        <button class="btn btn-outline" id="apRescore">${I('refresh', 14)} Re-score</button>
+        <button class="btn btn-outline" id="apReopen" title="Lets this email/phone submit a new application">${I('refresh', 14)} Allow re-apply</button>
+        <button class="btn btn-outline" id="apReject">${I('x', 14)} Reject</button>
+        <button class="btn btn-primary" id="apShort">${I('send', 14)} ${a.source === 'form' ? (a.status === 'Shortlisted' ? 'Shortlisted' : 'Shortlist (link emailed by the form script)') : (a.status === 'Shortlisted' ? 'Resend interview link' : 'Shortlist & send link')}</button>
+      </div>`);
+    const act = async (action, msg) => {
+      try { await Store.applicationAction(a.id, action); UI.toast(msg, 'success'); closeModal(); renderApplications(); } catch (e) { UI.toast(e.message || 'Failed', 'error'); }
+    };
+    $('#apShort').addEventListener('click', () => act('shortlist', 'Shortlisted - interview link emailed'));
+    $('#apReject').addEventListener('click', () => act('reject', 'Marked as not shortlisted'));
+    $('#apReopen').addEventListener('click', () => act('reopen', 'This candidate can apply again'));
+    $('#apRescore').addEventListener('click', () => act('rescore', 'Re-scored'));
+    $('#apRes').addEventListener('click', async () => {
+      try {
+        let token = ''; try { token = sessionStorage.getItem('dvago_admin_token') || ''; } catch (e) {}
+        const r = await fetch('api/applications/' + encodeURIComponent(a.id) + '/resume', { headers: token ? { Authorization: 'Bearer ' + token } : {} });
+        if (!r.ok) throw new Error('Resume file not found');
+        const link = document.createElement('a'); link.href = URL.createObjectURL(await r.blob()); link.download = (a.resume && a.resume.name) || 'resume'; link.click();
+      } catch (e) { UI.toast(e.message, 'error'); }
+    });
+    attachModalCloses();
+  }
   function buildInviteUrl(token) { return location.origin + location.pathname.replace(/admin\.html$/, '') + 'index.html?invite=' + token; }
 
   function openInviteModal() {
@@ -1245,7 +1315,7 @@
 
   // ---------- Roles & Questions (full editor) ----------
   async function renderRoles() {
-    const roleKey = state.rqRole || 'front-staff';
+    const roleKey = state.rqRole || Object.keys(B.ROLES)[0];
     const r = B.ROLES[roleKey];
     const tab = state.rqTab || 'sjt';
     view.innerHTML = `<div class="page-head">
@@ -1673,6 +1743,12 @@
       <div class="panel"><div class="panel-head"><div><h3>Scoring weights</h3><div class="sub">Adjust how each section contributes to the overall score</div></div></div><div class="panel-body" style="display:flex;flex-direction:column;gap:14px">
         ${Object.entries(s.weights).map(([k, v]) => `<label class="fld"><span>${k.charAt(0).toUpperCase() + k.slice(1)}: <b style="color:var(--brand-dark)">${v}%</b></span><input type="range" min="0" max="40" value="${v}" id="w-${k}"></label>`).join('')}
       </div></div></div>
+      ${Store.mode === 'server' ? `<div class="panels"><div class="panel"><div class="panel-head"><div><h3>Resume screening</h3><div class="sub">Applicants submit the form first; only a good enough resume score gets the interview link${Store.serverInfo && Store.serverInfo.groq ? '' : ' · <span style="color:var(--bad)">GROQ_API_KEY missing: every application will wait for HR review</span>'}</div></div></div><div class="panel-body" style="display:flex;flex-direction:column;gap:14px">
+        <label class="check" style="display:flex;gap:10px;align-items:flex-start;cursor:pointer"><input type="checkbox" id="scEnabled" ${(s.screening && s.screening.enabled === false) ? '' : 'checked'}><span style="font-size:14px"><b>Require resume screening before the interview</b><br><span style="color:var(--muted)">When OFF, candidates go straight into the interview like before.</span></span></label>
+        <label class="check" style="display:flex;gap:10px;align-items:flex-start;cursor:pointer"><input type="checkbox" id="scPortal" ${(s.screening && s.screening.portalApply) ? 'checked' : ''}><span style="font-size:14px"><b>Public apply page on this server</b><br><span style="color:var(--muted)">OFF (pilot): applications come only from the Google Form and this site is invitation-only. ON (company server): visitors apply here with their resume.</span></span></label>
+        <label class="fld"><span>Interview link is sent at or above: <b style="color:var(--brand-dark)" id="scPassV">${(s.screening && s.screening.pass) || 60}</b>%</span><input type="range" min="30" max="95" value="${(s.screening && s.screening.pass) || 60}" id="scPass"></label>
+        <label class="fld"><span>Send to HR review from: <b style="color:var(--brand-dark)" id="scRevV">${(s.screening && s.screening.reviewFrom != null) ? s.screening.reviewFrom : 55}</b>% (up to the mark above). Below this, the application is not shortlisted and no email is sent.</span><input type="range" min="0" max="95" value="${(s.screening && s.screening.reviewFrom != null) ? s.screening.reviewFrom : 55}" id="scRev"></label>
+      </div></div></div>` : ''}
       <div class="panels"><div class="panel"><div class="panel-head"><div><h3>SARAH voice follow-ups</h3><div class="sub">${Store.serverInfo && Store.serverInfo.groq ? '<span style="color:var(--good);font-weight:600">● Groq connected (' + esc(Store.serverInfo.groqModel || '') + ')</span>' : '<span style="color:var(--muted)">Not connected — set GROQ_API_KEY in server env to enable</span>'}</div></div></div><div class="panel-body" style="display:flex;flex-direction:column;gap:14px">
         <label class="check" style="display:flex;gap:10px;align-items:flex-start;cursor:pointer"><input type="checkbox" id="fuEnabled" ${(s.followUps && s.followUps.enabled !== false) ? 'checked' : ''}><span style="font-size:14px"><b>Enable dynamic follow-up questions</b><br><span style="color:var(--muted)">When ON, SARAH decides whether to ask a brief follow-up after each answer. When OFF, interview stays purely scripted.</span></span></label>
         <label class="fld"><span>Max follow-ups per question: <b style="color:var(--brand-dark)" id="fuPerQV">${(s.followUps && s.followUps.perQuestion) || 1}</b></span><input type="range" min="0" max="2" value="${(s.followUps && s.followUps.perQuestion) || 1}" id="fuPerQ"></label>
@@ -1684,11 +1760,12 @@
         <button class="btn btn-danger" id="bClear">${I('trash', 15)} Clear all candidates & invites</button>
       </div></div></div>
       <div class="panel"><div class="panel-body"><button class="btn btn-primary" id="saveS">${I('check', 15)} Save settings</button></div></div>`;
+    ['scPass', 'scRev'].forEach((id) => { const el = $('#' + id); if (el) el.addEventListener('input', () => { $('#' + id.replace('Rev', 'Rev') + 'V').textContent = el.value; }); });
     ['fuPerQ', 'fuTot', 'fuSkip'].forEach((id) => { const el = $('#' + id); if (el) el.addEventListener('input', () => { $('#' + id + 'V').textContent = el.value; }); });
     $('#saveS').addEventListener('click', async () => {
       const w = {}; Object.keys(s.weights).forEach((k) => w[k] = +$('#w-' + k).value);
       const fu = { enabled: $('#fuEnabled').checked, perQuestion: +$('#fuPerQ').value, totalPerInterview: +$('#fuTot').value, skipIfWords: +$('#fuSkip').value };
-      await Store.saveSettings({ companyName: $('#sName').value, allowWalkIn: $('#sWalk').checked, showCandidateFeedback: $('#sFb').checked, weights: w, followUps: fu });
+      await Store.saveSettings({ companyName: $('#sName').value, allowWalkIn: $('#sWalk').checked, showCandidateFeedback: $('#sFb').checked, weights: w, followUps: fu, ...($('#scPass') ? { screening: { enabled: $('#scEnabled').checked, portalApply: $('#scPortal').checked, pass: +$('#scPass').value, reviewFrom: Math.min(+$('#scRev').value, +$('#scPass').value) } } : {}) });
       UI.toast('Settings saved', 'success');
     });
     $('#bExport').addEventListener('click', async () => {

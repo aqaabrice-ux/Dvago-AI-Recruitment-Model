@@ -11,8 +11,8 @@
   };
 
   const CATEGORIES = {
-    retail: { label: 'Retail Stores', desc: 'Front-line roles across DVAGO pharmacies' },
-    corporate: { label: 'Corporate Office', desc: 'Head office & support functions' }
+    retail: { label: 'Branch Operations', desc: 'Retail stores' },
+    corporate: { label: 'Corporate Departments', desc: 'Head office, warehouse & support functions' }
   };
 
   const VOICE_COMMON = [
@@ -82,7 +82,7 @@
     }
   ];
 
-  const ROLES = {
+  const FAMILIES = {
     'front-staff': {
       title: 'Front Staff Representative', category: 'retail', icon: 'user',
       tagline: 'Be the first smile every customer sees.',
@@ -1026,194 +1026,340 @@
     };
   }
 
-  // Default positions (sub-specialisations) per role. Each has a job description shown to the candidate.
-  // Admins can add more via the dashboard.
+  // ---- DVAGO departments and roles (source: HR "roles & title" sheet) ----
+  // FAMILIES above are the content banks (voice prompts, scenarios, simulation, case study). Each department borrows the closest one;
+  // the question editor in the admin can then give any department its own content.
+  const DEPARTMENTS = [
+  {
+    "name": "Branch Operations",
+    "key": "branch-operations",
+    "short": "Branch Operations",
+    "tagline": "Run and serve at DVAGO pharmacy stores.",
+    "base": "front-staff",
+    "icon": "store",
+    "roles": [
+      "Head of Operations",
+      "Senior Manager Business Operations",
+      "Cleaner",
+      "Senior Manager Branch Operations",
+      "Rider",
+      "Branch Manager",
+      "Pharmacy Technician",
+      "Shift Supervisor",
+      "Pharmacist",
+      "Senior Branch Manager",
+      "Branch Incharge",
+      "Regional Manager",
+      "Area Manager",
+      "Trainee Shift Supervisor",
+      "Assistant Manager",
+      "Senior Pharmacy Technician",
+      "Porter",
+      "Trainee Pharmacy Technician",
+      "Clustered Cleaner",
+      "Trainee Pharmacist",
+      "Executive"
+    ]
+  },
+  {
+    "name": "Business Analytics & Insights",
+    "key": "business-analytics",
+    "short": "Business Analytics & Insights",
+    "tagline": "Turn data into decisions.",
+    "base": "finance",
+    "roles": [
+      "Assistant Manager"
+    ]
+  },
+  {
+    "name": "Business Application",
+    "key": "business-application",
+    "short": "Business Application",
+    "tagline": "Build and support the systems DVAGO runs on.",
+    "base": "it",
+    "roles": [
+      "Executive",
+      "Officer",
+      "Assistant Manager"
+    ]
+  },
+  {
+    "name": "Business Operations",
+    "key": "business-operations",
+    "short": "Business Operations",
+    "tagline": "Keep the business running smoothly.",
+    "base": "supply-chain",
+    "roles": [
+      "Executive",
+      "Officer"
+    ]
+  },
+  {
+    "name": "Commercial",
+    "key": "commercial",
+    "short": "Commercial",
+    "tagline": "Procurement, vendors and commercial growth.",
+    "base": "supply-chain",
+    "roles": [
+      "Head of Procurement - Pharma",
+      "Officer",
+      "Executive",
+      "Assistant",
+      "Purchase Officer",
+      "Senior Manager - Procurement Non Pharma",
+      "Senior Executive",
+      "Assistant Manager - Procurement Pharma",
+      "Associate Manager",
+      "Rider",
+      "Assistant Manager",
+      "Head of Commercial",
+      "Intern"
+    ]
+  },
+  {
+    "name": "Corporate Sales",
+    "key": "corporate-sales",
+    "short": "Corporate Sales",
+    "tagline": "Grow DVAGO's corporate accounts.",
+    "base": "marketing",
+    "roles": [
+      "Associate Manager",
+      "Officer"
+    ]
+  },
+  {
+    "name": "E-commerce Operations & Partnerships",
+    "key": "ecommerce",
+    "short": "E-commerce Operations & Partnerships",
+    "tagline": "Online orders, customers and partners.",
+    "base": "front-staff",
+    "roles": [
+      "Executive",
+      "Customer Service Representative",
+      "Rider",
+      "Senior Executive",
+      "Senior Customer Service Representative",
+      "Deputy Manager",
+      "Customer service representative (IN BOUND)",
+      "Assistant Manager",
+      "Manager",
+      "Associate Manager",
+      "Officer",
+      "On-Call Pharmacist",
+      "Consultant",
+      "Intern"
+    ]
+  },
+  {
+    "name": "Facilities Management and Government Affairs",
+    "key": "facilities",
+    "short": "Facilities Management & Government Affairs",
+    "tagline": "Facilities, admin and government liaison.",
+    "base": "quality",
+    "roles": [
+      "Executive",
+      "Assistant",
+      "Officer",
+      "Driver",
+      "Receptionist",
+      "Manager",
+      "Assistant Manager",
+      "Gate Keeper",
+      "Intern",
+      "Office Boy",
+      "Senior Executive"
+    ]
+  },
+  {
+    "name": "Finance",
+    "key": "finance",
+    "short": "Finance",
+    "tagline": "Accounts, control and planning.",
+    "base": "finance",
+    "roles": [
+      "Rider",
+      "Officer",
+      "Manager",
+      "Assistant",
+      "Assistant Manager",
+      "Deputy Manager",
+      "Executive",
+      "Senior Executive",
+      "Head of Finance & Business Planning",
+      "Finance Intern",
+      "Intern"
+    ]
+  },
+  {
+    "name": "Human Resources",
+    "key": "hr",
+    "short": "Human Resources",
+    "tagline": "People, culture and customer experience.",
+    "base": "hr",
+    "roles": [
+      "Head of People & Customer Experience",
+      "Senior Manager",
+      "Deputy Manager",
+      "Senior Executive",
+      "Officer",
+      "Assistant Manager",
+      "Executive",
+      "Intern"
+    ]
+  },
+  {
+    "name": "Internal Audit",
+    "key": "internal-audit",
+    "short": "Internal Audit",
+    "tagline": "Assurance, controls and compliance.",
+    "base": "quality",
+    "roles": [
+      "Assistant Manager Internal Audit",
+      "Associate Manager Internal Audit",
+      "Assistant Manager",
+      "Senior Executive",
+      "Executive",
+      "Head of Internal Audit",
+      "Deputy Manager",
+      "Officer"
+    ]
+  },
+  {
+    "name": "IT Network & Infrastructure",
+    "key": "it",
+    "short": "IT Network & Infrastructure",
+    "tagline": "Networks, infrastructure and support.",
+    "base": "it",
+    "roles": [
+      "Head of IT",
+      "Associate Manager",
+      "Executive",
+      "Assistant Manager",
+      "Senior Executive"
+    ]
+  },
+  {
+    "name": "Marketing",
+    "key": "marketing",
+    "short": "Marketing",
+    "tagline": "Brand, campaigns and growth.",
+    "base": "marketing",
+    "roles": [
+      "Assistant Manager",
+      "Associate Manager",
+      "Senior Manager",
+      "Senior Executive"
+    ]
+  },
+  {
+    "name": "Planning & Distribution",
+    "key": "planning-distribution",
+    "short": "Planning & Distribution",
+    "tagline": "Demand planning and stock distribution.",
+    "base": "supply-chain",
+    "roles": [
+      "Senior Manager - Demand Planning",
+      "Assistant Manager",
+      "Senior Executive",
+      "Associate Manager Planning & Distribution",
+      "Executive",
+      "Intern"
+    ]
+  },
+  {
+    "name": "Warehouse",
+    "key": "warehouse",
+    "short": "Warehouse",
+    "tagline": "Receive, store and dispatch with accuracy.",
+    "base": "supply-chain",
+    "roles": [
+      "Assistant",
+      "Assistant Manager",
+      "Associate Manager",
+      "Cleaner",
+      "Deputy Manager",
+      "Driver",
+      "Executive",
+      "Gate Keeper",
+      "Loader",
+      "Manager",
+      "Office Boy",
+      "Officer",
+      "Senior Executive",
+      "Senior Warehouse Assistant",
+      "Warehouse Assistant"
+    ]
+  }
+];
+
   const JD = (about, resp, req, perks) =>
     `About the role\n${about}\n\nKey responsibilities\n${resp.map((r) => '• ' + r).join('\n')}\n\nWhat we are looking for\n${req.map((r) => '• ' + r).join('\n')}\n\nWhat you'll get\n${perks.map((r) => '• ' + r).join('\n')}`;
 
-  const DEFAULT_POSITIONS = {
-    'front-staff': [
-      { id: 'fs-rep', title: 'Front Staff Representative', jd: JD(
-        "Be the welcoming face of your DVAGO store, help customers find what they need, and support the pharmacy team with everyday operations.",
-        ["Greet and assist walk-in customers warmly and professionally", "Help customers find products and explain basic usage", "Operate the point of sale and process billing accurately", "Maintain shelf arrangement, cleanliness and visual merchandising", "Follow FEFO (first expiry, first out) and remove expired products", "Support the pharmacist with over-the-counter sales"],
-        ["Matric or above; good spoken English and Urdu", "A friendly, service-first attitude", "Attention to detail and ability to stand for long periods", "Willing to work rotating shifts, weekends and public holidays"],
-        ["Competitive salary with performance incentives", "Health & medical coverage for self and family", "Clear career path to Senior Rep and Store Manager", "On-the-job training on retail pharmacy best practices"]
-      ) }
-    ],
-    'cashier': [
-      { id: 'ca-main', title: 'Cashier', jd: JD(
-        "Handle all cash, card and digital wallet transactions at the counter with speed, accuracy and complete honesty.",
-        ["Process billing for every customer accurately and quickly", "Handle cash, cards, Easypaisa and JazzCash payments", "Reconcile cash drawer at every shift opening and closing", "Issue receipts, process returns and discount coupons per policy", "Spot and report counterfeit notes and suspicious transactions", "Keep the counter area clean and organised"],
-        ["Matric or Intermediate; comfortable with numbers", "Prior cashiering or billing experience preferred", "Strong attention to detail and reliability with cash", "Willing to work rotating shifts including evenings"],
-        ["Fixed salary plus end-of-month attendance bonus", "Health & medical coverage", "Daily lunch allowance", "Growth into Senior Cashier and Shift Supervisor"]
-      ) }
-    ],
-    'store-manager': [
-      { id: 'sm-main', title: 'Store Manager', jd: JD(
-        "Lead one DVAGO pharmacy end-to-end: sales, team, inventory, compliance and customer experience.",
-        ["Hit monthly sales, margin and footfall targets", "Hire, roster, coach and develop a team of 6-10 staff", "Own stock availability, FEFO rotation and shrinkage control", "Ensure DRAP, cold-chain and SOP compliance at all times", "Resolve customer complaints and build community loyalty", "Report store KPIs weekly to area management"],
-        ["Bachelor's degree; 3+ years retail leadership experience", "Strong people-management and conflict-resolution skills", "Comfortable with KPIs, P&L, basic Excel", "Pharmacy or FMCG retail background is a plus"],
-        ["Attractive salary with store-performance bonus", "Health & medical coverage for self and family", "Leadership training programme", "Fast-track to Area/Regional Manager"]
-      ) },
-      { id: 'sm-asst', title: 'Assistant Store Manager', jd: JD(
-        "Partner with the Store Manager to run daily operations, step up in their absence, and get ready for your own store.",
-        ["Open and close the store; manage shift schedules", "Supervise front staff and cashiers on the floor", "Drive upselling, promotions and customer service standards", "Support inventory audits and daily cash reconciliation"],
-        ["Bachelor's degree; 1-2 years retail supervisory experience", "Hands-on, lead-by-example style", "Good communication and problem-solving skills"],
-        ["Competitive salary with monthly incentive", "Health & medical coverage", "Promotion to Store Manager within 12-18 months"]
-      ) }
-    ],
-    'pharma-assistant': [
-      { id: 'pa-main', title: 'Pharmacy Assistant', jd: JD(
-        "Support the pharmacist in safe, accurate dispensing and in giving patients a great experience.",
-        ["Receive and verify prescriptions under pharmacist supervision", "Dispense medicines accurately following labels and dosage", "Maintain the cold-chain log and daily fridge temperature records", "Manage controlled substances register with full accuracy", "Counsel patients on dose and storage under pharmacist guidance", "Flag any dispensing concern immediately to the pharmacist"],
-        ["Pharm-D student, Pharmacy Technician Diploma or B-Pharmacy", "Working knowledge of common medicines and dosage", "Honest, careful and detail-oriented", "Able to work rotating shifts"],
-        ["Competitive salary with experience-based increments", "Health coverage and medicine discount for family", "Access to continuous pharmacy training", "Clear path to Senior Pharmacy roles"]
-      ) }
-    ],
-    'marketing': [
-      { id: 'mk-exec', title: 'Marketing Executive', jd: JD(
-        "Run multi-channel marketing campaigns that grow DVAGO's brand across digital and in-store.",
-        ["Plan and execute seasonal and category campaigns", "Manage social media calendar across Instagram, Facebook, TikTok", "Coordinate with creative and influencer partners", "Track campaign KPIs: reach, engagement, footfall, ROI", "Prepare monthly performance reports for leadership"],
-        ["Bachelor's degree in marketing or related field", "1-3 years marketing experience; healthcare is a plus", "Hands-on with Canva, Meta Ads Manager, basic analytics", "Strong writing in English; Urdu is a plus"],
-        ["Competitive salary with campaign bonuses", "Health & medical coverage", "Learning budget for marketing courses", "Fast growth as DVAGO expands nationwide"]
-      ) },
-      { id: 'mk-digital', title: 'Digital Marketing Specialist', jd: JD(
-        "Own DVAGO's digital performance: paid media, SEO, email, CRM and the mobile app growth loop.",
-        ["Run paid campaigns on Meta, Google and TikTok", "Manage SEO for the DVAGO website and app store listings", "Build email and WhatsApp journeys for loyalty members", "A/B test landing pages and creative", "Report CAC, CPA, ROAS and retention metrics weekly"],
-        ["2-4 years paid digital experience with real campaign results", "Hands-on with Meta Ads, Google Ads, GA4, a CRM tool", "Analytical mindset; comfortable with numbers and testing", "Portfolio of past campaigns required"],
-        ["Attractive salary plus performance bonus", "Health & medical coverage", "Paid access to premium marketing tools and courses"]
-      ) },
-      { id: 'mk-brand', title: 'Brand Manager', jd: JD(
-        "Guard the DVAGO brand across every touchpoint and shape how Pakistan sees us.",
-        ["Own brand guidelines, tone of voice and visual identity", "Lead brand campaigns from brief to launch", "Manage agency relationships", "Track brand health metrics (awareness, consideration, NPS)", "Partner with Retail Ops on in-store brand experience"],
-        ["Bachelor's degree; 4+ years brand marketing experience", "Prior work on an FMCG, pharmacy or wellness brand preferred", "Strong strategic thinking and storytelling skills"],
-        ["Senior-level compensation package", "Health & medical coverage for family", "Leadership track to Head of Brand"]
-      ) },
-      { id: 'mk-content', title: 'Content Writer', jd: JD(
-        "Write content that educates customers about health, wellness and DVAGO products — in English and Urdu.",
-        ["Write blog articles, social captions, product descriptions, email copy", "Research health topics with accuracy and empathy", "Collaborate with designers for carousel and video scripts", "Edit and proofread the team's output"],
-        ["Bachelor's degree; portfolio of published writing", "Excellent written English; Urdu writing is a plus", "Curiosity about health, nutrition and wellness", "Comfortable with SEO best practices"],
-        ["Competitive salary", "Health coverage", "Flexible hybrid work option after probation"]
-      ) }
-    ],
-    'finance': [
-      { id: 'fi-main', title: 'Finance & Accounts Officer', jd: JD(
-        "Keep DVAGO's books accurate, reconciled and audit-ready across 100+ stores.",
-        ["Daily bank and cash reconciliation for assigned stores", "Record accruals, prepayments and journal entries", "Support monthly closing and management accounts", "Process supplier invoices and payments", "Prepare schedules for internal and external audit"],
-        ["Bachelor's in Accounting/Finance or part-qualified ACCA/CA", "1-3 years finance experience; retail/FMCG is a plus", "Strong Excel; exposure to SAP or Oracle is a plus", "Accuracy and ownership mindset"],
-        ["Competitive salary", "Health coverage", "ACCA/CA study support", "Growth into Senior Finance and Controller roles"]
-      ) },
-      { id: 'fi-audit', title: 'Internal Audit Officer', jd: JD(
-        "Audit DVAGO stores and corporate functions for process compliance, cash integrity and shrinkage control.",
-        ["Carry out scheduled and surprise store audits", "Review cash handling, refunds, discounts and voids", "Investigate shrinkage, stock variance and fraud flags", "Issue findings reports with corrective actions", "Track CAPA closure with store managers"],
-        ["Bachelor's in Accounting/Finance; CIA or ACCA preferred", "2-4 years internal audit experience", "Willingness to travel to stores across Pakistan"],
-        ["Attractive salary plus field allowance", "Health coverage", "Growth into Senior Audit and Risk roles"]
-      ) },
-      { id: 'fi-analyst', title: 'Financial Analyst', jd: JD(
-        "Turn DVAGO's data into decisions: budgets, forecasts, store P&L and investment cases.",
-        ["Build and maintain the annual budget and rolling forecast", "Prepare store P&L reports and variance analysis", "Model business cases for new stores, categories and campaigns", "Partner with Ops, Marketing and Supply Chain on finance questions"],
-        ["Bachelor's in Finance/Accounting or ACCA/CA finalist", "2-4 years FP&A or analyst experience", "Advanced Excel; Power BI is a plus"],
-        ["Competitive salary", "Health coverage", "High-visibility role with leadership exposure"]
-      ) }
-    ],
-    'hr': [
-      { id: 'hr-exec', title: 'HR Executive', jd: JD(
-        "Support the full employee lifecycle for DVAGO's growing team of 1,000+ across head office and stores.",
-        ["Handle recruitment, onboarding and documentation", "Maintain HRIS and personnel files accurately", "Support payroll, attendance and leave management", "Address employee queries and grievances", "Coordinate training sessions and engagement activities"],
-        ["Bachelor's degree in HR or related field", "1-3 years HR experience; retail is a plus", "Working knowledge of Pakistan labour law", "Empathetic, discreet and detail-oriented"],
-        ["Competitive salary", "Health coverage for self and family", "Learning budget for HR certifications"]
-      ) },
-      { id: 'hr-ta', title: 'Talent Acquisition Specialist', jd: JD(
-        "Build the pipeline of front-line and corporate talent that fuels DVAGO's expansion.",
-        ["Own end-to-end hiring for assigned roles and locations", "Run walk-in hiring days for store openings", "Source candidates through job boards, referrals and LinkedIn", "Use the DVAGO AI assessment platform to screen candidates", "Partner with hiring managers on structured interviews"],
-        ["Bachelor's degree; 2-4 years recruitment experience", "Strong sourcing and interviewing skills", "Comfortable with ATS and recruitment analytics"],
-        ["Competitive salary plus hiring targets bonus", "Health coverage", "Rapid growth as DVAGO opens new stores"]
-      ) },
-      { id: 'hr-ld', title: 'Learning & Development Officer', jd: JD(
-        "Design and deliver training that lifts the capability of every DVAGO employee.",
-        ["Design onboarding and SOP training for new joiners", "Build role-specific learning paths for staff and managers", "Deliver classroom and online training sessions", "Measure training effectiveness and ROI"],
-        ["Bachelor's degree; 2-4 years L&D experience", "Confident facilitator; good instructional design skills", "Comfortable with LMS platforms"],
-        ["Competitive salary", "Health coverage", "Access to global L&D certifications"]
-      ) }
-    ],
-    'it': [
-      { id: 'it-support', title: 'IT Support Engineer', jd: JD(
-        "Keep every DVAGO store and head-office user running — POS, printers, network, laptops and apps.",
-        ["Resolve tickets for store POS, printers, scanners and label machines", "Set up new user accounts, laptops and email", "Manage network connectivity at stores (VPN, Wi-Fi)", "First-response for incidents; escalate to vendors as needed", "Maintain IT asset inventory"],
-        ["Bachelor's in CS/IT; 1-3 years hands-on IT support experience", "Comfortable with Windows, basic networking, Active Directory", "Retail or POS experience is a strong plus", "Willing to travel to stores for setup/incidents"],
-        ["Competitive salary plus on-call allowance", "Health coverage", "Tool stipend; training on enterprise systems"]
-      ) },
-      { id: 'it-data', title: 'Data Analyst', jd: JD(
-        "Turn DVAGO's sales, inventory and customer data into insights the business acts on every week.",
-        ["Build and maintain dashboards for Sales, Supply Chain and Marketing", "Write SQL queries against the data warehouse", "Analyse basket, promotion, loyalty and inventory patterns", "Partner with teams on A/B tests and performance reviews", "Automate recurring reports"],
-        ["Bachelor's in CS, Stats, Economics or related field", "2-4 years analytics experience with SQL + Excel + a BI tool (Power BI/Tableau/Looker)", "Strong business sense; can explain findings simply", "Python / R a plus"],
-        ["Competitive salary with annual bonus", "Health coverage", "Access to premium analytics tools and learning platforms"]
-      ) },
-      { id: 'it-aiml', title: 'AI / ML Engineer', jd: JD(
-        "Build the AI products that power DVAGO: demand forecasting, personalisation, chatbot, and smart hiring.",
-        ["Design and ship ML models for forecasting, recommendation and NLP use cases", "Own data pipelines, feature stores and model deployment", "Integrate LLM-based products (chat, voice, recruitment AI)", "Monitor model performance and iterate", "Collaborate with Data, Product and Engineering teams"],
-        ["Bachelor's/Master's in CS or related field; 2-5 years ML experience", "Strong Python, SQL, PyTorch or TensorFlow, scikit-learn", "Hands-on with LLM APIs (OpenAI, Anthropic, open-source)", "Experience deploying models to production (MLflow, FastAPI, cloud)"],
-        ["Top-end compensation", "Health coverage", "GPU and cloud credits; conference budget", "Work on real AI products used by millions of Pakistanis"]
-      ) },
-      { id: 'it-dev', title: 'Software Developer', jd: JD(
-        "Build and maintain DVAGO's internal tools, APIs and customer-facing web/mobile features.",
-        ["Design and build web services, APIs and integrations", "Contribute to the DVAGO mobile app and admin dashboards", "Write clean, tested code with code reviews", "Partner with Product and Design on user-facing features", "Troubleshoot production issues and ship fixes"],
-        ["Bachelor's in CS; 2-5 years full-stack experience", "Strong JavaScript/TypeScript, Node.js or Python, React", "Database experience (PostgreSQL/MySQL)", "Git, CI/CD, cloud (AWS/Azure/GCP) a plus"],
-        ["Attractive salary", "Health coverage", "Modern dev tooling, laptop of choice", "Hybrid work option"]
-      ) },
-      { id: 'it-infra', title: 'Network / Infrastructure Engineer', jd: JD(
-        "Design, operate and secure the network and server infrastructure that connects 100+ DVAGO stores.",
-        ["Manage SD-WAN, VPN, firewalls and store Wi-Fi", "Operate on-prem and cloud servers (Windows/Linux, VMware, AWS/Azure)", "Monitor uptime, patch systems, run backups", "Plan network capacity for new store openings", "Respond to incidents on-call"],
-        ["Bachelor's in CS/Network Engineering; 3-6 years infra experience", "CCNA/CCNP, Azure/AWS cert a plus", "Scripting with PowerShell or Python"],
-        ["Senior-level salary with on-call allowance", "Health coverage", "Certification sponsorship"]
-      ) },
-      { id: 'it-sec', title: 'Cybersecurity Analyst', jd: JD(
-        "Protect DVAGO's systems, data and customers from cyber threats.",
-        ["Monitor SIEM alerts and investigate security incidents", "Run vulnerability scans and coordinate patching", "Lead phishing awareness and security training", "Review access controls, backups and DR readiness", "Maintain compliance with PCI-DSS and data-protection standards"],
-        ["Bachelor's in CS/InfoSec; 2-5 years security experience", "Working knowledge of SIEM, EDR, firewalls, Active Directory", "Security certifications (CEH, Security+, CISSP) a plus"],
-        ["Attractive compensation", "Health coverage", "Training and certification budget"]
-      ) }
-    ],
-    'supply-chain': [
-      { id: 'sc-main', title: 'Supply Chain Officer', jd: JD(
-        "Make sure the right medicine reaches the right DVAGO store at the right time.",
-        ["Plan and raise purchase orders based on forecast and stock", "Coordinate warehouse-to-store distribution across Pakistan", "Monitor on-time, in-full (OTIF) delivery performance", "Manage short-dated and recalled stock per SOP", "Partner with suppliers on service and quality"],
-        ["Bachelor's in Supply Chain, Business or related field", "2-4 years supply chain experience in retail/pharma", "Strong Excel; SAP/Oracle experience a plus"],
-        ["Competitive salary", "Health coverage", "Growth into Senior Supply Chain and Planning roles"]
-      ) },
-      { id: 'sc-proc', title: 'Procurement Officer', jd: JD(
-        "Source and negotiate with suppliers to secure quality, price and reliability for DVAGO.",
-        ["Qualify new suppliers; manage existing supplier relationships", "Run RFQs and negotiate contracts, pricing and payment terms", "Track supplier scorecards (quality, OTIF, cost)", "Partner with Finance and QA on supplier compliance"],
-        ["Bachelor's degree; 2-4 years procurement experience", "Strong negotiation and analytical skills", "Pharma procurement experience is a strong plus"],
-        ["Competitive salary with annual bonus", "Health coverage", "Exposure to senior stakeholders and strategic decisions"]
-      ) },
-      { id: 'sc-log', title: 'Logistics Coordinator', jd: JD(
-        "Run the daily transport and distribution operation across DVAGO's store network.",
-        ["Plan daily delivery routes and dispatch to stores", "Coordinate with 3PL partners and own fleet", "Resolve delivery issues and in-transit incidents", "Maintain cold-chain integrity for temperature-sensitive items"],
-        ["Bachelor's degree; 1-3 years logistics experience", "Comfortable with route planning tools and WMS/TMS", "Night-shift availability during peak season"],
-        ["Competitive salary with shift allowance", "Health coverage", "Fast-track to Logistics Manager"]
-      ) }
-    ],
-    'quality': [
-      { id: 'qa-main', title: 'Quality Assurance Officer', jd: JD(
-        "Keep every DVAGO store compliant with DRAP, SOPs and the highest patient-safety standards.",
-        ["Conduct scheduled and surprise store quality audits", "Monitor cold-chain, FEFO, expired-stock and narcotics compliance", "Lead CAPA for findings and track closure", "Prepare documentation for DRAP inspections", "Train store teams on quality SOPs"],
-        ["Pharm-D or Bachelor's in a related field; 2-4 years QA experience", "Working knowledge of DRAP regulations and GDP/GSP", "Willing to travel to stores across Pakistan"],
-        ["Competitive salary plus travel allowance", "Health coverage", "Clear growth into Senior QA and Compliance Manager"]
-      ) },
-      { id: 'qa-comp', title: 'Compliance Officer', jd: JD(
-        "Ensure DVAGO meets regulatory, legal and licensing requirements across all operations.",
-        ["Maintain DRAP, trade and other operational licences", "Monitor regulatory changes and update SOPs", "Coordinate with legal counsel on contracts and disputes", "Investigate compliance incidents and recommend controls"],
-        ["Bachelor's in Law, Pharmacy or Business; 3-5 years compliance experience", "Strong knowledge of Pakistan pharmaceutical regulations", "Excellent writing and stakeholder communication"],
-        ["Senior-level salary", "Health coverage", "High-visibility role working with executive leadership"]
-      ) }
-    ]
-  };
+  const PERKS = ['Competitive salary and benefits', 'Health & medical coverage', 'Training and clear career growth at DVAGO'];
+  function jdFor(dept, title) {
+    const t = title.toLowerCase(), d = dept.short;
+    if (/pharmacist|pharmacy technician/.test(t)) {
+      return JD(`${title} at DVAGO: safe, accurate dispensing and patient care in a ${d.toLowerCase()} setting.`,
+        ['Verify prescriptions and dispense medicines accurately', 'Counsel patients on dose, storage and side effects', 'Maintain cold-chain, controlled-drug and expiry records', 'Follow DRAP regulations and DVAGO SOPs', 'Flag any dispensing concern immediately'],
+        ['Relevant pharmacy qualification or licence for the level', 'Honest, careful and detail-oriented', 'Willing to work rotating shifts'], PERKS);
+    }
+    if (/intern|trainee/.test(t)) {
+      return JD(`A learning role in ${d}: you work alongside the team and build real, hands-on skills.`,
+        ['Support the team with day-to-day tasks and reports', 'Learn DVAGO processes and tools quickly', 'Take ownership of small assignments and finish them on time', 'Share ideas and ask questions'],
+        ['Currently studying or recently graduated in a relevant field', 'Eager to learn, reliable and curious', 'Good communication skills'], ['Mentoring from experienced colleagues', 'Real project exposure', 'Possible conversion to a full-time role']);
+    }
+    if (/cleaner|porter|rider|driver|gate ?keeper|office boy|loader|receptionist/.test(t)) {
+      return JD(`${title} for ${d}: a dependable role that keeps DVAGO's daily work moving.`,
+        ['Carry out daily duties reliably and on time', 'Follow safety, hygiene and company rules', 'Represent DVAGO politely with colleagues and customers', 'Report problems to the supervisor promptly'],
+        ['Honest, punctual and hard-working', 'Basic reading and communication skills', 'Relevant licence or experience where the job needs it'], PERKS);
+    }
+    if (/^head of|^head\b/.test(t)) {
+      return JD(`${title}: lead the function, set direction and answer for results across ${d}.`,
+        ['Set the strategy, targets and budget for the function', 'Lead, coach and grow managers and their teams', 'Report performance and risks to the CEO and leadership', 'Drive compliance, process discipline and cost control', 'Build strong working links with other departments'],
+        ['Many years of progressive experience, including leading large teams', 'Strong business judgement and communication', 'A track record of delivering results'], ['Senior-level compensation', 'Health coverage for self and family', 'High-visibility leadership role']);
+    }
+    if (/regional manager|area manager|senior (branch )?manager|senior manager|deputy manager|^manager|associate manager|branch manager|branch incharge/.test(t)) {
+      return JD(`${title}: own results and lead a team in ${d}.`,
+        ['Own targets, plans and day-to-day delivery for your area', 'Lead, coach and review the performance of your team', 'Control cost, quality and compliance', 'Solve escalations and report to senior management', 'Improve processes and work across departments'],
+        ['Bachelor\'s degree and relevant experience for the level', 'Proven people-management and decision-making skills', 'Comfortable with KPIs, reports and Excel'], ['Competitive salary with performance bonus', 'Health coverage', 'Leadership development and growth path']);
+    }
+    if (/assistant manager|shift supervisor|supervisor|consultant/.test(t)) {
+      return JD(`${title}: run the day-to-day work and support the team in ${d}.`,
+        ['Plan and supervise daily work and shifts', 'Support the manager on targets, reports and compliance', 'Coach team members and keep standards high', 'Escalate issues early and follow up to closure'],
+        ['Degree or equivalent experience; 1-3 years in a similar role', 'Hands-on, reliable, good communicator'], PERKS);
+    }
+    return JD(`${title} in ${d}: a hands-on role that keeps work accurate, on time and customer-focused.`,
+      ['Carry out the daily tasks of your function accurately and on time', 'Prepare records, reports and follow-ups', 'Coordinate with colleagues and other departments', 'Follow DVAGO policies, SOPs and compliance rules', 'Suggest and apply improvements'],
+      ['Relevant education and some experience (freshers with strong potential are welcome)', 'Good communication in English and Urdu', 'Organised, honest and a team player'], PERKS);
+  }
+
+  const ROLES = {};
+  DEPARTMENTS.forEach((d) => {
+    const base = FAMILIES[d.base];
+    ROLES[d.key] = Object.assign({}, base, { title: d.short, category: d.key === 'branch-operations' ? 'retail' : 'corporate', icon: d.icon || base.icon, tagline: d.tagline, departmentName: d.name });
+    ROLES[d.key].voice = base.voice.map((v) => v.id !== 'why' ? v : { id: 'why', q: `Why do you want to join DVAGO in ${d.short}, and what would make you great at it?`, checks: [
+      { label: 'Knows DVAGO / the function', kw: ['dvago', 'pharmacy', 'health', 'wellness', 'company', 'brand', 'team', 'department'] },
+      { label: 'Relevant strengths', kw: ['experience', 'skill', 'good at', 'strength', 'worked', 'learn', 'degree', 'studied'] },
+      { label: 'Personal fit / motivation', kw: ['i am', "i'm", 'my', 'want', 'passion', 'grow', 'career', 'goal'] }
+    ] });
+  });
+
+  const DEFAULT_POSITIONS = {};
+  DEPARTMENTS.forEach((d) => {
+    const used = new Set();
+    DEFAULT_POSITIONS[d.key] = d.roles.map((r) => {
+      let id = d.key + '-' + r.toLowerCase().replace(/&/g, 'and').replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, ''); while (used.has(id)) id += '-2'; used.add(id);
+      return { id, title: r, jd: jdFor(d, r) };
+    });
+  });
 
   // Mark all defaults so admin UI knows what's seedable
   Object.values(DEFAULT_POSITIONS).forEach((arr) => arr.forEach((p) => { p.isDefault = true; p.isActive = true; }));
 
-  const BANK = { COMPETENCIES, CATEGORIES, ROLES, SECTIONS, REASONING, COMMON_SJT, VOICE_COMMON, DEFAULT_POSITIONS, roleQuestions };
+  // Old family keys (before the department list) -> the department that replaced them, used to migrate saved data.
+  const LEGACY_ROLE_MAP = { 'front-staff': 'branch-operations', 'cashier': 'branch-operations', 'store-manager': 'branch-operations', 'pharma-assistant': 'branch-operations', 'marketing': 'marketing', 'finance': 'finance', 'hr': 'hr', 'it': 'it', 'supply-chain': 'planning-distribution', 'quality': 'internal-audit' };
+
+  const BANK = { COMPETENCIES, CATEGORIES, ROLES, SECTIONS, REASONING, COMMON_SJT, VOICE_COMMON, DEFAULT_POSITIONS, DEPARTMENTS, LEGACY_ROLE_MAP, roleQuestions };
   if (typeof module !== 'undefined' && module.exports) module.exports = BANK;
   else root.DVAGO_BANK = BANK;
 })(typeof window !== 'undefined' ? window : globalThis);

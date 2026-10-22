@@ -49,6 +49,8 @@
 
   // ---------- Neural voice (server /api/tts -> Groq Orpheus). Falls back to the browser voice on any failure. ----------
   const neural = { failUntil: 0, audio: null, token: 0, stopToken: -1, abort: null, release: null };
+  // If the server says the AI voice is off (TTS_ENABLED=false or not configured), go straight to the browser voice.
+  try { fetch('api/health').then((r) => (r.ok ? r.json() : null)).then((j) => { if (j && j.tts === false) neural.failUntil = Infinity; }).catch(() => {}); } catch (e) {}
 
   // Split into clips of <= ~190 chars on sentence boundaries (the TTS model accepts ~200 chars per request).
   function chunkText(t, max) {
@@ -153,7 +155,7 @@
         if (voice) u.voice = voice;
         // Natural voices sound best at slightly slower pace
         const isNat = voice && /Natural|Enhanced|Siri|Online|Neural|WaveNet/i.test(voice.name);
-        u.rate = isNat ? 0.98 : 1.0;
+        u.rate = isNat ? 0.94 : 0.88;   // slower pace: the plain system voices sound harsh when fast
         u.pitch = 1.0;
         u.volume = 1;
         let done = false, started = false;

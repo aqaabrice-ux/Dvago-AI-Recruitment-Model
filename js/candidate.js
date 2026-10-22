@@ -34,6 +34,13 @@
     { label: 'Assessment', stages: ['brief', 'exam'] },
     { label: 'Done', stages: ['processing', 'done'] }
   ];
+  // Application mode (resume screening first): the interview link comes later by email, so the journey is shorter.
+  const APPLY_STEPS = [
+    { label: 'Welcome', stages: ['greet'] },
+    { label: 'Role', stages: ['role', 'position', 'jd'] },
+    { label: 'Profile', stages: ['profile'] },
+    { label: 'Submitted', stages: ['applied'] }
+  ];
 
   let S = null;
   let settings = {};
@@ -44,7 +51,7 @@
   function newState() {
     return {
       v: 2, stage: 'splash', sessionId: Store.uid('S'), createdAt: new Date().toISOString(),
-      inviteToken: null, invite: null, schedule: null,
+      inviteToken: null, invite: null, schedule: null, applyMode: false, applied: null,
       candidate: { fullName: '', email: '', phone: '', cnic: '', city: '', education: '', experience: '', employer: '', currentSalary: '', currentPerks: '', expectedSalary: '', linkedin: '' },
       consent: false, resume: null, role: null, position: null, voiceLang: 'en-US', voiceTyping: false,
       voice: [], voiceIdx: 0,
@@ -110,7 +117,7 @@
     S.stage = stage;
     save();
     // Screenshot/copy deterrents run across the whole interview (every stage except the entry/exit screens).
-    if (['splash', 'closed', 'loggedout', 'done'].includes(stage)) Guard.stop(); else Guard.start();
+    if (['splash', 'closed', 'loggedout', 'done', 'applied'].includes(stage)) Guard.stop(); else Guard.start();
     if (!restoring) history.pushState({ dvago: stage }, '');
     updateTopbar();
     window.scrollTo({ top: 0 });
@@ -134,8 +141,9 @@
     $('#topbar').classList.toggle('hidden', hide);
     document.body.classList.toggle('with-top', !hide);
     if (hide) return;
-    const idx = STEPS.findIndex((s) => s.stages.includes(S.stage));
-    $('#tbSteps').innerHTML = STEPS.map((s, i) => {
+    const steps = S.applyMode ? APPLY_STEPS : STEPS;
+    const idx = steps.findIndex((s) => s.stages.includes(S.stage));
+    $('#tbSteps').innerHTML = steps.map((s, i) => {
       const st = i < idx ? 'done' : i === idx ? 'active' : '';
       return (i ? `<span class="tb-sep ${i <= idx ? 'done' : ''}"></span>` : '') +
         `<span class="tb-step ${st}"><span class="dot">${i < idx ? I('check', 12) : i + 1}</span><span class="lbl">${s.label}</span></span>`;
@@ -302,7 +310,7 @@
   // common ones (PrintScreen, right-click save, copy, Ctrl+P/S), blank the screen when the
   // window loses focus (Snipping Tool / alt-tab), and log every attempt for HR.
   const Guard = {
-    on: false, overlay: null,
+    on: false, overlay: null, shieldTimer: null,
     start() {
       if (this.on) return; this.on = true;
       document.body.classList.add('no-shot');
@@ -324,10 +332,22 @@
       document.removeEventListener('visibilitychange', this.onVis);
       Guard.hideShield();
     },
+    // Hide the screen immediately (and for a moment) when a screenshot shortcut is pressed.
+    shieldFor(ms) {
+      Guard.showShield();
+      clearTimeout(Guard.shieldTimer);
+      Guard.shieldTimer = setTimeout(() => { if (document.hasFocus()) Guard.hideShield(); }, ms);
+    },
     warn(msg) { try { UI.toast(msg, 'error', 2600); } catch (e) {} },
     onCtx(e) { e.preventDefault(); },
     onKeyDown(e) {
       const k = (e.key || '').toLowerCase();
+      // Windows key (Win+Shift+S / Snipping Tool) and Cmd+Shift+3/4/5 on Mac: black out the page before the capture happens.
+      const isMac = /Mac|iPhone|iPad/i.test(navigator.platform || navigator.userAgent || '');
+      if ((e.key === 'Meta' && !isMac) || (e.metaKey && e.shiftKey) || (e.altKey && e.key === 'PrintScreen')) {
+        Guard.shieldFor(2500);
+        try { logEvent('screenshot_attempt', e.metaKey || e.key === 'Meta' ? 'Win/Cmd shortcut' : e.key); } catch (_) {}
+      }
       if (e.key === 'PrintScreen' || ((e.ctrlKey || e.metaKey) && ['p', 's', 'u', 'c'].includes(k))) {
         e.preventDefault();
         try { logEvent('screenshot_attempt', e.key); } catch (_) {}
@@ -426,10 +446,10 @@
       <div class="splash-tag">Pharmacy &amp; Wellness Experts</div>
       <div class="splash-sub">
         <span class="splash-pill">${I('sparkles', 16)} <b>AI Interview Experience</b> · powered by SARAH</span>
-        <button class="btn btn-primary btn-lg btn-shine" id="enter">${S.candidate.fullName ? 'Welcome, ' + esc(first()) + ' — enter' : 'Enter your interview'} ${I('right', 18)}</button>
+        <button class="btn btn-primary btn-lg btn-shine" id="enter">${S.applyMode ? 'Apply to DVAGO' : S.candidate.fullName ? 'Welcome, ' + esc(first()) + ' — enter' : 'Enter your interview'} ${I('right', 18)}</button>
         <span class="small muted" style="display:inline-flex;gap:6px;align-items:center">${I('volume', 14)} Turn your sound on — SARAH will speak with you</span>
       </div>
-      <div class="splash-foot"><span>${I('lock', 14)} Secure &amp; private</span><span>${I('clock', 14)} About 40 minutes</span><span>${I('globe', 14)} Best in Chrome or Edge</span></div>
+      <div class="splash-foot"><span>${I('lock', 14)} Secure &amp; private</span><span>${I('clock', 14)} ${S.applyMode ? 'Takes about 3 minutes' : 'About 40 minutes'}</span><span>${I('globe', 14)} Best in Chrome or Edge</span></div>
     `, 'splash');
     $('#enter').addEventListener('click', (e) => {
       UI.burst(e.clientX, e.clientY, { count: 90 });
@@ -446,7 +466,7 @@
       invalid: ['This link is not valid', 'We could not find this interview invitation. Please check the link in your email or contact DVAGO HR.'],
       used: ['Interview already completed', 'This interview link has already been used. Each link can be used only once — thank you for your time!'],
       expired: ['This link has expired', 'Your invitation is no longer active. Please contact DVAGO HR to request a new interview link.'],
-      inviteOnly: ['Invitation required', 'DVAGO interviews are by invitation only. Please open the personal link sent to your email.']
+      inviteOnly: ['Invitation required', 'DVAGO interviews are by invitation only. Apply through the DVAGO job form; if your profile is shortlisted, your personal interview link will be emailed to you.']
     }[reason] || ['Unavailable', 'This interview is not available.'];
     screen(`<div class="splash-logo" style="height:56px;margin-bottom:10px">${UI.logo()}</div>
       <div class="lock">${I('lock', 40)}</div><h1 class="h2">${M[0]}</h1><p class="lead">${M[1]}</p>`, 'closed');
@@ -455,7 +475,11 @@
   // ---------- Greeting slideshow ----------
   function renderGreet() {
     const f = first();
-    const slides = [
+    const AM = !!S.applyMode;
+    const slides = AM ? [
+      { title: `Assalam-o-Alaikum${f ? ', ' + esc(f) : ''}!`, sub: "I am SARAH — DVAGO's Personal Recruiter Agent.", say: `Assalam-o-Alaikum${f ? ' ' + f : ''}, and welcome to DVAGO! I am SARAH, your personal recruiter agent.` },
+      { title: 'How applying works', sub: 'Three short steps — it takes about three minutes.', journey: true, say: "Here is how it works. You choose your role, then fill in your profile and upload your resume. Our team reviews your application, and if your profile matches the role, I will email you a personal interview link." }
+    ] : [
       { title: `Assalam-o-Alaikum${f ? ', ' + esc(f) : ''}!`, sub: "I am SARAH — DVAGO's Personal Recruiter Agent.", say: `Assalam-o-Alaikum${f ? ' ' + f : ''}, and welcome to DVAGO! I am SARAH, your personal recruiter agent.` },
       { title: 'Hope you are doing well.', sub: "I'll be with you at every step of today's interview. It's friendly, fair, and takes about 40 minutes.", say: "I hope you are doing well. I'll be with you at every step of today's interview. It is friendly, fair, and takes about forty minutes." },
       { title: 'Your interview journey', sub: 'Five simple steps — I will guide you through each one.', journey: true, say: "Here is how it works. First, you choose your role. Then your profile and resume. Next, a short voice conversation with me. After that, a real-world assessment. And then, you're done!" },
@@ -474,7 +498,9 @@
       <button class="skip" id="skip">Skip intro ${I('right', 14)}</button>
     `, 'greet');
     const orb = $('.orb');
-    const journey = [['user', 'Profile', 'Details & resume'], ['target', 'Role', 'Pick your position'], ['mic', 'Voice chat', 'Talk with SARAH'], ['file', 'Assessment', 'Real-world tasks'], ['award', 'Done', 'Submit & relax']];
+    const journey = AM
+      ? [['target', 'Role', 'Pick your position'], ['user', 'Profile', 'Details & resume'], ['send', 'Interview link', 'Emailed if shortlisted']]
+      : [['user', 'Profile', 'Details & resume'], ['target', 'Role', 'Pick your position'], ['mic', 'Voice chat', 'Talk with SARAH'], ['file', 'Assessment', 'Real-world tasks'], ['award', 'Done', 'Submit & relax']];
     const tips = [['volume', 'Quiet place', 'Find a calm spot with little background noise.'], ['mic', 'Mic & speakers on', 'You can answer by voice — or type if you prefer.'], ['wifi', 'Stable internet', 'Your progress is saved if you get disconnected.'], ['sparkles', 'Be yourself', 'There are no trick questions. Honest answers win.']];
 
     async function show(n) {
@@ -492,9 +518,10 @@
       if (my !== token) return;
       if (auto && i < slides.length - 1) setTimeout(() => { if (my === token && auto) show(i + 1); }, 1100);
     }
-    $('#next').addEventListener('click', () => { auto = false; Voice.stop(); i < slides.length - 1 ? show(i + 1) : go('schedule'); });
+    const afterGreet = () => go(AM ? 'role' : 'schedule');
+    $('#next').addEventListener('click', () => { auto = false; Voice.stop(); i < slides.length - 1 ? show(i + 1) : afterGreet(); });
     $('#prev').addEventListener('click', () => { auto = false; Voice.stop(); if (i > 0) show(i - 1); });
-    $('#skip').addEventListener('click', () => go('schedule'));
+    $('#skip').addEventListener('click', afterGreet);
     onLeave(() => { token++; });
     show(0);
   }
@@ -672,9 +699,44 @@
           return;
         }
       } catch (e) {}
+      if (S.applyMode) return submitApplication();
       $('#go').disabled = false;
       confirmFit(() => enableCameraThen(() => go('syscheck')));
     });
+    // Resume screening mode: send the application. The candidate is never told a score; an interview link arrives by email only if shortlisted.
+    async function submitApplication() {
+      const perr = $('#perr');
+      if (!S.resume || !S.resume.dataUrl) { $('#go').disabled = false; perr.innerHTML = `<p class="err-msg">${I('alert', 16)} Please upload your resume to apply.</p>`; return; }
+      if (S.resume.parsing) { $('#go').disabled = false; perr.innerHTML = `<p class="err-msg">${I('alert', 16)} SARAH is still reading your resume — please wait a moment.</p>`; return; }
+      $('#go').innerHTML = `${I('refresh', 16)} Submitting…`;
+      try {
+        const r = await Store.apply({ candidate: S.candidate, role: S.role, positionId: S.position && S.position.id, resume: { name: S.resume.name, type: S.resume.type, size: S.resume.size, dataUrl: S.resume.dataUrl, text: S.resume.text } });
+        if (r && r.ok === false) {
+          $('#go').disabled = false; $('#go').innerHTML = `Continue ${I('right', 18)}`;
+          perr.innerHTML = `<p class="err-msg">${I('alert', 16)} ${r.reason === 'already-completed' ? 'An interview has already been completed with this email. Please contact DVAGO HR.' : 'We already have an application from you. Our team will contact you by email if you are shortlisted — please do not submit again.'}</p>`;
+          return;
+        }
+        S.applied = { at: new Date().toISOString(), email: S.candidate.email, position: S.position && S.position.title };
+        S.resume.dataUrl = null;
+        go('applied');
+      } catch (e) {
+        $('#go').disabled = false; $('#go').innerHTML = `Continue ${I('right', 18)}`;
+        perr.innerHTML = `<p class="err-msg">${I('alert', 16)} ${esc(e.message || 'Could not submit your application. Please try again.')}</p>`;
+      }
+    }
+  }
+
+  function renderApplied() {
+    const a = S.applied || {};
+    screen(`<div class="splash-logo" style="height:56px;margin-bottom:10px">${UI.logo()}</div>
+      <div class="glass panel panel-narrow" style="text-align:center">
+        <div class="lock" style="color:var(--green,#78B943)">${I('check', 40)}</div>
+        <h1 class="h2">Application received</h1>
+        <p class="lead" style="margin-top:8px">Thank you${S.candidate.fullName ? ', ' + esc(first()) : ''}! Your application${a.position ? ' for <b>' + esc(a.position) + '</b>' : ''} has been submitted.</p>
+        <p class="muted" style="margin-top:12px">Our team will review your resume. If your profile matches the role, SARAH will email a personal interview link to <b>${esc(a.email || S.candidate.email)}</b>. Please keep an eye on your inbox (and spam folder).</p>
+        <p class="small muted" style="margin-top:16px">You do not need to apply again — duplicate applications are not reviewed.</p>
+      </div>`, 'closed');
+    Voice.speak(`Thank you ${first()}. Your application has been received. If your profile matches the role, I will email you an interview link.`);
   }
 
   // Ask the server's AI to read the resume. Returns validated fields + fit, or null (not configured / offline / error / timeout).
@@ -744,8 +806,9 @@
       return;
     }
     const r = S.resume;
-    box.innerHTML = `<div class="file-card ${r.parsing ? 'scan' : ''}"><div class="f-ico">${I('file', 20)}</div><div class="f-meta"><b>${esc(r.name)}</b><span>${Math.max(1, Math.round(r.size / 1024))} KB ·${r.parsing ? 'SARAH is reading…' : r.text ? 'Analysed by SARAH' : 'Attached'}</span></div><button class="btn btn-ghost btn-sm btn-icon" id="rmResume" aria-label="Remove resume">${I('x', 16)}</button></div>`;
-    $('#rmResume').addEventListener('click', () => { S.resume = null; save(); drawResume(); });
+    box.innerHTML = `<div class="file-card ${r.parsing ? 'scan' : ''}"><div class="f-ico">${I('file', 20)}</div><div class="f-meta"><b>${esc(r.name)}</b><span>${Math.max(1, Math.round(r.size / 1024))} KB ·${r.parsing ? 'SARAH is reading…' : r.text ? 'Analysed by SARAH' : 'Attached'}</span></div>${r.fromApplication ? '' : `<button class="btn btn-ghost btn-sm btn-icon" id="rmResume" aria-label="Remove resume">${I('x', 16)}</button>`}</div>`;
+    const rm = $('#rmResume');
+    if (rm) rm.addEventListener('click', () => { S.resume = null; save(); drawResume(); });
     if (r.insights) {
       const a = r.insights;
       const rel = a.relevance;
@@ -793,7 +856,7 @@
     S.resume.text = text.slice(0, 20000);
     S.resume.parsing = false;
     if (text.trim()) {
-      const a = DIA_EVAL.analyzeResume(text, S.role || 'front-staff');
+      const a = DIA_EVAL.analyzeResume(text, S.role || Object.keys(B.ROLES)[0]);
       const all = Array.from(new Set(Object.values(B.ROLES).flatMap((r) => r.skills)));
       const low = text.toLowerCase();
       a.skills = all.filter((s) => hasSkill(low, s));
@@ -903,18 +966,17 @@
   function renderRole() {
     const locked = S.invite && S.invite.role && B.ROLES[S.invite.role];
     if (locked) S.role = S.invite.role;
-    let cat = S.role ? B.ROLES[S.role].category : 'retail';
+    
     screen(`<div class="glass panel">
-      <span class="eyebrow">Step 1 · Choose your role</span>
-      <h2 class="h2" style="margin-top:10px">${locked ? 'Your interview is for this role' : 'Which role are you applying for?'}</h2>
-      <p class="lead" style="margin-top:6px">Your voice questions, scenarios and case study will be tailored to this role.</p>
-      ${locked ? `<div class="locked-note">${I('lock', 14)} Set by DVAGO HR in your invitation</div>` : `<div class="tabs" id="tabs">${Object.entries(B.CATEGORIES).map(([k, v]) => `<button class="tab" data-cat="${k}">${I(k === 'retail' ? 'store' : 'grid', 15).replace('class="ico', 'style="display:inline;vertical-align:-3px;margin-right:6px" class="ico')}${v.label}</button>`).join('')}</div>`}
+      <span class="eyebrow">Step 1 · Choose your department</span>
+      <h2 class="h2" style="margin-top:10px">${locked ? 'Your interview is for this department' : 'Which department are you applying to?'}</h2>
+      <p class="lead" style="margin-top:6px">Your voice questions, scenarios and case study will be tailored to this department. Next you will pick your exact role.</p>
+      ${locked ? `<div class="locked-note">${I('lock', 14)} Set by DVAGO HR in your invitation</div>` : ''}
       <div class="role-grid" id="roles"></div>
       <div class="row-end"><button class="btn btn-ghost" id="back">${I('left', 16)} Back</button><button class="btn btn-primary btn-lg" id="go" ${S.role ? '' : 'disabled'}>Continue ${I('right', 18)}</button></div>
     </div>`);
     function draw() {
-      $$('#tabs .tab').forEach((t) => t.classList.toggle('on', t.dataset.cat === cat));
-      const list = Object.entries(B.ROLES).filter(([k, r]) => (locked ? k === S.role : r.category === cat));
+      const list = Object.entries(B.ROLES).filter(([k, r]) => (!locked || k === S.role));
       $('#roles').innerHTML = list.map(([k, r], n) => `<button class="role ${S.role === k ? 'sel' : ''}" data-r="${k}" style="animation:fadeUp .5s var(--ease) ${n * 0.05}s both">
         <span class="tick">${I('check', 14)}</span><div class="r-ico">${I(r.icon, 24)}</div><b>${esc(r.title)}</b><span>${esc(r.tagline)}</span>
         <div class="r-meta"><span class="chip">${I('clock', 11).replace('class="ico', 'style="display:inline;vertical-align:-1px" class="ico')} ~40 min</span><span class="chip">Voice + Case study</span></div></button>`).join('');
@@ -925,17 +987,16 @@
         $('#go').disabled = false;
       }));
     }
-    $$('#tabs .tab').forEach((t) => t.addEventListener('click', () => { cat = t.dataset.cat; draw(); }));
     draw();
-    $('#back').addEventListener('click', () => go('schedule'));
+    $('#back').addEventListener('click', () => go(S.applyMode ? 'greet' : 'schedule'));
     $('#go').addEventListener('click', () => {
       if (!S.role) return;
       S.voice = []; S.voiceIdx = 0;
       S.position = null;
       go('position');
     });
-    if (!locked) Voice.speak('Great. Now choose the role you are applying for.');
-    else Voice.speak(`Your interview today is for the ${B.ROLES[S.role].title} role.`);
+    if (!locked) Voice.speak('Great. Now choose the department you are applying to.');
+    else Voice.speak(`Your interview today is for the ${B.ROLES[S.role].title} department.`);
   }
 
   // ---------- Position selection ----------
@@ -968,6 +1029,9 @@
       if (list.length === 0) {
         list.push({ id: S.role + '-default', roleKey: S.role, title: r.title, jd: 'A ' + r.title + ' role at DVAGO. Full job description will be shared by the recruiter.', isActive: true });
       }
+      // An invitation from resume screening is for one specific position: no choice to make.
+      const pinned = S.invite && S.invite.positionId && all.find((p) => p.id === S.invite.positionId);
+      if (pinned) { S.position = pinned; save(); go('jd'); return; }
       if (list.length === 1) { S.position = list[0]; save(); go('jd'); return; }
       const grid = $('#positions');
       grid.innerHTML = list.map((p, n) => `<button class="role ${S.position && S.position.id === p.id ? 'sel' : ''}" data-id="${esc(p.id)}" style="animation:fadeUp .5s var(--ease) ${n * 0.05}s both">
@@ -2023,7 +2087,7 @@
       <p class="small muted">Questions? Contact DVAGO HR · careers@dvago.pk</p>`, 'closed');
   }
 
-  const RENDER = { splash: renderSplash, greet: renderGreet, schedule: renderSchedule, scheduled: renderScheduled, profile: renderProfile, role: renderRole, position: renderPosition, jd: renderJD, syscheck: renderSyscheck, voice: renderVoice, brief: renderBrief, exam: renderExam, processing: renderProcessing, done: renderDone };
+  const RENDER = { splash: renderSplash, greet: renderGreet, schedule: renderSchedule, scheduled: renderScheduled, profile: renderProfile, role: renderRole, position: renderPosition, jd: renderJD, syscheck: renderSyscheck, voice: renderVoice, brief: renderBrief, exam: renderExam, processing: renderProcessing, done: renderDone, applied: renderApplied };
 
   // ---------------- boot ----------------
   async function boot() {
@@ -2064,7 +2128,15 @@
       S.candidate.fullName = inv.name || '';
       S.candidate.email = inv.email || '';
       if (inv.role && B.ROLES[inv.role]) S.role = inv.role;
+      // Invitation from resume screening: carry over the screened details and the exact resume that was scored.
+      if (inv.profile) Object.keys(inv.profile).forEach((k) => { if (inv.profile[k]) S.candidate[k] = inv.profile[k]; });
+      if (inv.resume && inv.resume.text) S.resume = { name: inv.resume.name, type: inv.resume.type, size: inv.resume.size, dataUrl: null, text: inv.resume.text, parsing: false, fromApplication: true };
       if (inv.status === 'Sent') { try { await Store.updateInvite(token, { status: 'Opened', openedAt: new Date().toISOString() }); } catch (e) {} }
+    } else if (settings.screening && settings.screening.enabled !== false && Store.mode === 'server') {
+      // Screening is on and there is no personal link. Pilot: applications come through the Google Form, so this page is invitation-only.
+      // With "portalApply" on (IT-server version) the visitor applies right here and gets a link only if the resume screening passes.
+      if (!settings.screening.portalApply) return renderClosed('inviteOnly');
+      S.applyMode = true;
     } else if (settings.allowWalkIn === false) {
       return renderClosed('inviteOnly');
     }

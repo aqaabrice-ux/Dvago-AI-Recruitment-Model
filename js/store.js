@@ -171,6 +171,16 @@
         return kv.del('invites', token);
       },
   
+      // ----- applications (resume screening; server mode only) -----
+      async apply(payload) {
+        await init();
+        if (mode !== 'server') throw new Error('Applications need the DVAGO server to be running.');
+        return api('apply', { method: 'POST', body: payload });
+      },
+      async listApplications() { await init(); return mode === 'server' ? api('applications') : []; },
+      async applicationAction(id, action) { await init(); return api('applications/' + encodeURIComponent(id) + '/' + action, { method: 'POST', body: {} }); },
+      async deleteApplication(id) { await init(); return api('applications/' + encodeURIComponent(id), { method: 'DELETE' }); },
+
       // ----- submissions -----
       async hasCompleted(email, role) {
         await init();
