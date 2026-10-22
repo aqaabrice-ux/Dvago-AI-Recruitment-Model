@@ -147,21 +147,17 @@ async function sendCompletionConfirmation({ to, name, roleTitle, positionTitle, 
   return send({ to, subject: 'We received your DVAGO interview — ' + refId, html, text, meta: { kind: 'completion', refId } });
 }
 
-async function sendInvite({ to, name, link, roleTitle }) {
+async function sendInvite({ to, name, link, roleTitle, dept }) {
+  // Plain layout, same wording as the Google Automation invite email.
   const first = (name || '').split(/\s+/)[0] || 'there';
-  const html = wrap("You're invited to interview with DVAGO",
-    `<p>Dear ${first},</p>
-     <p>You are invited to complete your DVAGO interview with <b>SARAH</b>, our AI recruiter agent${roleTitle ? ', for the <b>' + roleTitle + '</b> position' : ''}.</p>
-     <p>SARAH will guide you through a short conversation, scenarios and a case study — tailored to the role. The whole experience takes about <b>40 minutes</b> and you can start whenever you're ready in the next 7 days.</p>
-     <p><b>Tips for your best interview:</b></p>
-     <ul style="padding-left:20px;color:#4A5560">
-       <li>Pick a quiet place with stable internet</li>
-       <li>Use Chrome or Edge on a laptop/desktop</li>
-       <li>Keep your resume handy to upload</li>
-     </ul>`,
-    { url: link, label: 'Start my interview' });
-  const text = `Dear ${first},\n\nYou are invited to interview with DVAGO for ${roleTitle || 'a position'}.\n\nStart here: ${link}\n\nIt takes about 40 minutes.\n\nBest of luck!\nDVAGO HR`;
-  return send({ to, subject: "You're invited to interview with DVAGO" + (roleTitle ? ' — ' + roleTitle : ''), html, text, meta: { kind: 'invite' } });
+  const html =
+    `<p>Dear ${first},</p>` +
+    `<p>You are invited to complete your DVAGO interview with <b>SARAH</b>, our AI recruiter${roleTitle ? ', for the <b>' + roleTitle + '</b> ' + (dept ? 'department' : 'position') : ''}.</p>` +
+    `<p><a href="${link}" style="background:#78B943;color:#fff;padding:12px 24px;border-radius:8px;text-decoration:none;font-weight:bold">Start my interview</a></p>` +
+    `<p>It takes about 40 minutes. Please use Chrome or Edge on a laptop, in a quiet place with stable internet. The link is valid for 7 days.</p>` +
+    `<p>Best of luck!<br>DVAGO HR</p>`;
+  const text = `Dear ${first},\n\nYou are invited to interview with DVAGO for ${roleTitle || 'a position'}.\nStart here: ${link}\n\nIt takes about 40 minutes. The link is valid for 7 days.\n\nBest of luck!\nDVAGO HR`;
+  return send({ to, subject: "You're invited to interview with DVAGO" + (roleTitle ? ' - ' + roleTitle : ''), html, text, meta: { kind: 'invite' } });
 }
 
 module.exports = { send, sendScheduleConfirmation, sendCompletionConfirmation, sendInvite, listEmails, isConfigured: () => !!getTransporter() };
