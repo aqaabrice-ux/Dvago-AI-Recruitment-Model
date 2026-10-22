@@ -106,6 +106,7 @@
     renderNav();
     renderSideCard();
     render();
+    try { const n = fbCount(); if (n && Store.mode === 'server') UI.toast(n + ' interview' + (n === 1 ? ' is' : 's are') + ' waiting for your feedback (Interview feedback tab)', 'info'); } catch (e) {}
   }
 
   function renderNav() {
@@ -120,14 +121,15 @@
       { k: 'candidates', ico: 'people', label: 'Candidates', cnt: n },
       { k: 'inbox', ico: 'bell', label: 'Inbox', cnt: newCount || null },
       { k: 'review', ico: 'award', label: 'Recommended', cnt: pendingReviewCount() || null },
+      { k: 'feedback', ico: 'star', label: 'Interview feedback', cnt: fbCount() || null, server: true },
       { k: 'applications', ico: 'file', label: 'Applications', server: true },
-      { k: 'hierarchy', ico: 'store', label: 'Hierarchy', server: true },
+      { k: 'hierarchy', ico: 'store', label: 'Org structure', server: true },
       { k: 'invites', ico: 'send', label: 'Invitations' },
       { k: 'analytics', ico: 'chart', label: 'Analytics' },
       { k: 'positions', ico: 'target', label: 'Positions & JDs', master: true },
       { k: 'roles', ico: 'book', label: 'Questions Editor', master: true },
       { k: 'emails', ico: 'mail', label: 'Email outbox', master: true },
-      { k: 'org', ico: 'store', label: 'Org structure', master: true, server: true },
+      { k: 'org', ico: 'target', label: 'Department setup', master: true, server: true },
       { k: 'users', ico: 'people', label: 'Users (HODs)', master: true, server: true },
       { k: 'settings', ico: 'settings', label: 'Settings', master: true }
     ].filter((it) => (M || !it.master) && (!it.server || Store.mode === 'server')).map((it) => `<button class="nav-item ${state.tab === it.k ? 'active' : ''}" data-k="${it.k}">${I(it.ico, 18)}<span>${esc(it.label)}</span>${it.cnt ? `<span class="cnt">${it.cnt}</span>` : ''}</button>`).join('');
@@ -164,6 +166,7 @@
       candidates: renderCandidates,
       inbox: renderInbox,
       review: renderReview,
+      feedback: renderFeedback,
       applications: renderApplications,
       hierarchy: renderHierarchy,
       invites: renderInvites,
@@ -178,12 +181,15 @@
   // ---------- Positions management ----------
   async function renderPositions() {
     const positions = await Store.listPositions();
+    let pqInfo = {}; try { pqInfo = await Store.positionQuestionInfo(); } catch (e) {}
     const roleFilter = state.posRoleFilter || '';
     const filtered = roleFilter ? positions.filter((p) => p.roleKey === roleFilter) : positions;
+    const nHave = positions.filter((p) => pqInfo[p.id] && pqInfo[p.id].has).length;
 
     view.innerHTML = `<div class="page-head">
-        <div><h1>Positions & JDs</h1><p>Create, edit, and manage every DVAGO position. These show up when candidates pick their role.</p></div>
+        <div><h1>Positions & JDs</h1><p>Create, edit, and manage every DVAGO position. Each position can have its own interview questions, built from its JD · ${nHave} of ${positions.length} have them.</p></div>
         <div class="actions">
+          ${Store.mode === 'server' ? `<button class="btn btn-outline btn-sm" id="genMissing">${I('zap', 15)} Generate missing questions (AI)</button>` : ''}
           <button class="btn btn-primary btn-sm" id="newPos">${I('plus', 15)} New position</button>
         </div>
       </div>
@@ -193,16 +199,19 @@
           <span style="margin-left:auto;color:var(--muted);font-size:13px">${filtered.length} position${filtered.length === 1 ? '' : 's'}</span>
         </div>
         ${filtered.length === 0 ? `<div class="empty"><div class="ei">${I('target', 24)}</div><h3>No positions yet</h3><p>Create your first position so candidates can see a tailored job description.</p></div>` : `
-        <table class="tbl"><thead><tr><th>Title</th><th>Role</th><th>JD length</th><th>Status</th><th>Type</th><th></th></tr></thead><tbody>
+        <table class="tbl"><thead><tr><th>Title</th><th>Role</th><th>JD length</th><th>Questions</th><th>Status</th><th>Type</th><th></th></tr></thead><tbody>
           ${filtered.map((p) => {
             const r = B.ROLES[p.roleKey];
+            const pq = pqInfo[p.id];
             return `<tr>
               <td><b>${esc(p.title)}</b></td>
               <td><span class="badge b-info">${esc(r ? r.title : p.roleKey)}</span></td>
               <td style="font-variant-numeric:tabular-nums">${(p.jd || '').length} chars</td>
+              <td>${pq && pq.has ? '<span class="badge b-good">JD-based</span>' : '<span class="badge b-neutral">Department default</span>'}</td>
               <td><span class="badge ${p.isActive !== false ? 'b-good' : 'b-neutral'}">${p.isActive !== false ? 'Active' : 'Hidden'}</span></td>
               <td>${p.isDefault ? '<span class="badge b-neutral">Default</span>' : '<span class="badge b-info">Custom</span>'}</td>
               <td style="display:flex;gap:6px;justify-content:flex-end">
+                <button class="btn btn-outline btn-sm" data-pq="${esc(p.id)}">${I('book', 13)} Questions</button>
                 <button class="btn btn-outline btn-sm" data-edit="${esc(p.id)}">${I('eye', 13)} Edit</button>
                 <button class="btn btn-outline btn-sm" data-del="${esc(p.id)}">${I('trash', 13)}</button>
               </td>
@@ -212,6 +221,23 @@
       </div>`;
     $('#fPosRole').addEventListener('change', (e) => { state.posRoleFilter = e.target.value; render(); });
     $('#newPos').addEventListener('click', () => openPositionEditor(null));
+    $$('[data-pq]').forEach((b) => b.addEventListener('click', () => { state.rqRole = 'pos:' + b.dataset.pq; state.rqTab = state.rqTab || 'sjt'; switchTab('roles'); }));
+    const gm = $('#genMissing');
+    if (gm) gm.addEventListener('click', async () => {
+      const missing = positions.filter((p) => p.isActive !== false && !(pqInfo[p.id] && pqInfo[p.id].has)).length;
+      if (!missing) return UI.toast('Every active position already has its own questions', 'success');
+      if (!confirm(`Generate JD-based questions for ${missing} position${missing === 1 ? '' : 's'} with AI? This runs in the background (about ${Math.max(1, Math.round(missing * 0.4))} min) and you can keep working.`)) return;
+      try { await Store.generateMissingQuestions(false); } catch (e) { return UI.toast(e.message, 'error'); }
+      gm.disabled = true;
+      const poll = async () => {
+        let s; try { s = await Store.questionJobStatus(); } catch (e) { return; }
+        if (state.tab !== 'positions') return;
+        gm.innerHTML = s.running ? `${I('refresh', 15)} Generating ${s.done}/${s.total}…` : `${I('check', 15)} Done`;
+        if (s.running) setTimeout(poll, 4000);
+        else { UI.toast(`Questions generated${s.failed && s.failed.length ? ' (' + s.failed.length + ' failed, try again)' : ''}`, s.failed && s.failed.length ? 'info' : 'success'); render(); }
+      };
+      poll();
+    });
     $$('[data-edit]').forEach((b) => b.addEventListener('click', () => openPositionEditor(positions.find((p) => p.id === b.dataset.edit))));
     $$('[data-del]').forEach((b) => b.addEventListener('click', () => confirmDeletePosition(positions.find((p) => p.id === b.dataset.del))));
   }
@@ -350,7 +376,7 @@
   }
 
   function confirmVQReset(roleKey) {
-    modal(`<div class="m-head"><div class="m-ico warn">${I('refresh', 20)}</div><div><h3>Reset to default questions?</h3><p>All your edits for <b>${esc(B.ROLES[roleKey].title)}</b> will be removed and SARAH will go back to the built-in questions.</p></div></div>
+    modal(`<div class="m-head"><div class="m-ico warn">${I('refresh', 20)}</div><div><h3>Reset to default questions?</h3><p>All your edits for <b>${esc(titleOfKey(roleKey))}</b> will be removed and SARAH will go back to the built-in questions.</p></div></div>
       <div class="m-foot"><button class="btn btn-outline" data-dismiss>Cancel</button><button class="btn btn-primary" id="vqRstCfm">Reset</button></div>`);
     $('#vqRstCfm').addEventListener('click', async () => { await Store.resetVoiceQuestions(roleKey); UI.toast('Reset to default', 'success'); closeModal(); render(); });
     attachModalCloses();
@@ -390,7 +416,9 @@
           <p>Overview of your AI-powered recruitment pipeline</p>
         </div>
         <div class="actions">
-          ${n === 0 ? `<button class="btn btn-outline btn-sm" id="seedBtn">${I('sparkles', 15)} Load demo data</button>` : ''}
+          ${isMaster() ? (allData.some((d) => d.demo)
+            ? `<button class="btn btn-outline btn-sm" id="unseedBtn">${I('trash', 15)} Remove demo data</button>`
+            : `<button class="btn btn-outline btn-sm" id="seedBtn">${I('sparkles', 15)} Load demo data</button>`) : ''}
           <button class="btn btn-primary btn-sm" id="newInvite">${I('plus', 15)} New invitation</button>
         </div>
       </div>
@@ -418,6 +446,7 @@
         ${renderMiniTable(data.slice(0, 8))}
       </div>`;
     const seed = $('#seedBtn'); if (seed) seed.addEventListener('click', doSeed);
+    const unseed = $('#unseedBtn'); if (unseed) unseed.addEventListener('click', doUnseed);
     $('#newInvite').addEventListener('click', openInviteModal);
     const va = $('#viewAll'); if (va) va.addEventListener('click', () => switchTab('candidates'));
     drawTrend(); drawRec();
@@ -686,6 +715,12 @@
               ${d.round2 && d.round2.history && d.round2.history.length ? `<div style="font-size:12px;color:var(--muted);display:flex;flex-direction:column;gap:3px">${d.round2.history.slice().reverse().map((h) => `<span>${esc(h.event)} · ${esc(h.by || '')} · ${dtTime(h.at)}</span>`).join('')}</div>` : ''}
             </div>
           </div>` : ''}
+          ${(d.round2 && ['slot-set', 'sent'].includes(d.round2.status)) ? `<div class="side-panel"><h4>Interview feedback & offer</h4><div style="display:flex;flex-direction:column;gap:10px">
+              ${(d.reviews || []).length ? reviewBlock(d) : '<div class="rv-note">No feedback yet.</div>'}
+              <button class="btn ${needsMe(d) ? 'btn-primary' : 'btn-outline'} btn-sm" id="fbOpen">${I('star', 14)} ${myReview(d) ? 'Edit my feedback' : 'Give feedback'}</button>
+              ${OFFER_META[offerSt(d)] ? `<span class="badge ${OFFER_META[offerSt(d)].cls}" style="align-self:flex-start">${OFFER_META[offerSt(d)].label}</span>` : ''}
+              <div style="display:flex;flex-wrap:wrap;gap:8px">${offerActions(d)}</div>
+            </div></div>` : ''}
           <div class="side-panel">
             <h4>Rating</h4>
             <div class="stars" id="stars">${[1, 2, 3, 4, 5].map((n) => `<button data-n="${n}" class="${(d.rating || 0) >= n ? 'on' : ''}" aria-label="${n} stars">${I('star', 22)}</button>`).join('')}</div>
@@ -734,6 +769,8 @@
     const r2a = $('#r2Approve'); if (r2a) r2a.addEventListener('click', async () => { await reviewAction('approve', d.id); renderDetail(); });
     const r2s = $('#r2Send'); if (r2s) r2s.addEventListener('click', () => openSendModal(d));
     const r2i = $('#r2Invite'); if (r2i) r2i.addEventListener('click', () => openSlotModal(d));
+    const fbo = $('#fbOpen'); if (fbo) fbo.addEventListener('click', () => openFeedbackModal(d, renderDetail));
+    $$('[data-fa]').forEach((b) => b.addEventListener('click', () => feedbackAction(b.dataset.fa, b.dataset.id, renderDetail)));
     const pv = $('#playVideoLink'); if (pv) pv.addEventListener('click', (e) => { e.preventDefault(); openVideoModal(d); });
     const pv2 = $('#playVid'); if (pv2) pv2.addEventListener('click', () => openVideoModal(d));
     $$('.stage-btn').forEach((b) => b.addEventListener('click', async () => {
@@ -797,7 +834,7 @@
         });
       });
     } else if (section === 'case') {
-      const cs = B.ROLES[d.role] && B.roleQuestions(d.role).caseStudy;
+      const cs = d.qset ? d.qset.caseStudy : (B.ROLES[d.role] && B.roleQuestions(d.role).caseStudy);
       body.innerHTML = `<div class="ans-list">${(cs?.questions || []).map((q, k) => {
         const ans = (d.answers?.case || {})[q.id] || '';
         const item = (ev.sections?.case?.items || [])[k] || {};
@@ -810,7 +847,7 @@
         </div>`;
       }).join('') || '<p class="muted" style="text-align:center;padding:20px">No case answers</p>'}</div>`;
     } else if (section === 'sjt') {
-      const sjts = B.ROLES[d.role] && B.roleQuestions(d.role).sjt;
+      const sjts = d.qset ? d.qset.sjt : (B.ROLES[d.role] && B.roleQuestions(d.role).sjt);
       body.innerHTML = `<div class="ans-list">${(sjts || []).map((q, k) => {
         const sel = (d.answers?.sjt || {})[q.id];
         const item = (ev.sections?.sjt?.items || [])[k] || {};
@@ -897,33 +934,31 @@
       <div class="sec-tabs" id="rvTabs" style="margin-bottom:16px">
         ${[['all', 'All', all.length], ['pending', 'Awaiting approval', cnt('pending')], ['approved', 'Approved', cnt('approved')], ['slot-set', 'Invite ready', cnt('slot-set')], ['sent', 'Email sent', cnt('sent')]].map(([k, l, n]) => `<button class="sec-tab ${f === k ? 'active' : ''}" data-f="${k}">${esc(l)} (${n})</button>`).join('')}
       </div>
-      <div class="table-wrap">
-        ${items.length === 0 ? `<div class="empty"><div class="ei">${I('award', 24)}</div><h3>Nothing to review here</h3><p>Candidates recommended as "Hire" or "Strong Hire" will appear here for approval.</p></div>` : `
-        <table class="tbl"><thead><tr><th>Candidate</th><th>Role</th><th>Score</th><th>Recommendation</th><th>Expected salary</th><th>Status</th><th style="text-align:right">Action</th></tr></thead><tbody>
-          ${items.map((d) => {
+      <div class="rv-list">
+        ${items.length === 0 ? `<div class="table-wrap"><div class="empty"><div class="ei">${I('award', 24)}</div><h3>Nothing to review here</h3><p>Candidates recommended as "Hire" or "Strong Hire" will appear here for approval.</p></div></div>` : items.map((d) => {
             const st = r2Status(d); const meta = R2_STATUS[st]; const r2 = d.round2 || {};
             const act = st === 'pending'
               ? `<button class="btn btn-primary btn-sm" data-act="approve" data-id="${d.id}">${I('check', 14)} Approve</button>`
               : st === 'approved'
-                ? `<button class="btn btn-primary btn-sm" data-act="invite" data-id="${d.id}">${I('send', 14)} Invite for next round</button> <button class="btn btn-outline btn-sm" data-act="undo" data-id="${d.id}" title="Undo approval">${I('x', 14)}</button>`
+                ? `<button class="btn btn-primary btn-sm" data-act="invite" data-id="${d.id}">${I('send', 14)} Invite for next round</button><button class="btn btn-outline btn-sm" data-act="undo" data-id="${d.id}" title="Undo approval">${I('x', 14)} Undo</button>`
                 : st === 'slot-set'
-                  ? `<button class="btn btn-primary btn-sm" data-act="send" data-id="${d.id}">${I('send', 14)} ${r2.send && r2.send.state === 'failed' ? 'Retry email' : 'Send email'}</button> <button class="btn btn-outline btn-sm" data-act="invite" data-id="${d.id}">${I('clock', 14)} Change slot</button>`
+                  ? `<button class="btn btn-primary btn-sm" data-act="send" data-id="${d.id}">${I('send', 14)} ${r2.send && r2.send.state === 'failed' ? 'Retry email' : 'Send email'}</button><button class="btn btn-outline btn-sm" data-act="invite" data-id="${d.id}">${I('clock', 14)} Change slot</button>`
                   : `<button class="btn btn-outline btn-sm" data-act="invite" data-id="${d.id}">${I('clock', 14)} Change slot</button>`;
-            return `<tr data-id="${d.id}" class="rv-row">
-              <td><div class="td-cand"><div class="av" style="background:${avColor(d.candidate.fullName)}">${initials(d.candidate.fullName)}</div><div><b>${esc(d.candidate.fullName)}</b><span>${esc(d.candidate.email)}</span></div></div></td>
-              <td>${esc(d.roleTitle)}</td>
-              <td>${scorePill(d.evaluation?.overall || 0)}</td>
-              <td>${recBadge(d.evaluation?.recommendation || '-')}</td>
-              <td>${d.candidate.expectedSalary ? 'PKR ' + Number(d.candidate.expectedSalary).toLocaleString() : '-'}</td>
-              <td><span class="badge ${meta.cls}">${esc(meta.label)}</span>${r2.slot ? `<div style="font-size:12px;color:var(--muted);margin-top:4px">${I('clock', 11)} ${esc(slotLabel(r2.slot.at))} · ${r2.slot.durationMin} min · ${r2.mode === 'onsite' ? 'On-site' : 'Online'}</div>` : ''}${r2.meetLink ? `<div style="font-size:12px;margin-top:2px"><a href="${esc(r2.meetLink)}" target="_blank" rel="noopener">Meet link</a></div>` : ''}${r2.send && r2.send.state === 'failed' ? `<div style="font-size:12px;color:var(--bad,#c0392b);margin-top:2px" title="${esc(r2.send.error)}">${I('alert', 11)} Email failed</div>` : ''}${r2.approvedBy && st !== 'pending' ? `<div style="font-size:12px;color:var(--muted)">by ${esc(r2.approvedBy)}</div>` : ''}</td>
-              <td style="text-align:right;white-space:nowrap">
+            return `<div class="rv-card" data-id="${d.id}">
+              <div class="rv-main">
+                <div class="rv-c1"><div class="td-cand"><div class="av" style="background:${avColor(d.candidate.fullName)}">${initials(d.candidate.fullName)}</div><div><b>${esc(d.candidate.fullName)}</b><span>${esc(d.candidate.email)}</span></div></div></div>
+                <div class="rv-c2"><small>Role</small><b>${esc(d.positionTitle || d.roleTitle)}</b>${d.positionTitle ? `<span>${esc(d.roleTitle)}</span>` : ''}</div>
+                <div class="rv-c3"><small>Score</small><div class="rv-sc">${scorePill(d.evaluation?.overall || 0)}${recBadge(d.evaluation?.recommendation || '-')}</div></div>
+                <div class="rv-c4"><small>Expected salary</small><b>${d.candidate.expectedSalary ? 'PKR ' + Number(d.candidate.expectedSalary).toLocaleString() : '-'}</b></div>
+                <div class="rv-c5"><span class="badge ${meta.cls}">${esc(meta.label)}</span>${r2.slot ? `<div class="rv-note">${I('clock', 11)} ${esc(slotLabel(r2.slot.at))} · ${r2.slot.durationMin} min · ${r2.mode === 'onsite' ? 'On-site' : 'Online'}</div>` : ''}${r2.meetLink ? `<div class="rv-note"><a href="${esc(r2.meetLink)}" target="_blank" rel="noopener">Meet link</a></div>` : ''}${r2.send && r2.send.state === 'failed' ? `<div class="rv-note bad" title="${esc(r2.send.error)}">${I('alert', 11)} Email failed</div>` : ''}${r2.approvedBy && st !== 'pending' ? `<div class="rv-note">approved by ${esc(r2.approvedBy)}</div>` : ''}</div>
+              </div>
+              <div class="rv-actions">
                 <button class="btn btn-outline btn-sm" data-act="resume" data-id="${d.id}" ${d.resume ? '' : 'disabled title="No resume uploaded"'}>${I('download', 14)} Resume</button>
                 <button class="btn btn-outline btn-sm" data-act="view" data-id="${d.id}">${I('right', 14)} View</button>
                 ${act}
-              </td>
-            </tr>`;
+              </div>
+            </div>`;
           }).join('')}
-        </tbody></table>`}
       </div>`;
     $$('#rvTabs .sec-tab').forEach((b) => b.addEventListener('click', () => { state.reviewFilter = b.dataset.f; renderReview(); }));
     $('#refreshBtn').addEventListener('click', async () => { await loadData(); renderNav(); UI.toast('Refreshed', 'success'); renderReview(); });
@@ -1060,7 +1095,157 @@
     });
   }
 
-  // ---------- Org structure (master) ----------
+  // ---------- After the 2nd-round interview: panel feedback, then the job offer ----------
+  // HOD (or master) scores the interview and says Good to go / On hold / Not a fit. A "Good to go" can be turned into "Make offer";
+  // only HR (master) then sets the salary and sends the offer email. HODs never see salary figures.
+  const FB_CRITERIA = [['knowledge', 'Role knowledge', 'Knows the work of this position'], ['communication', 'Communication', 'Clear, structured, listens well'], ['problem', 'Problem solving', 'Practical judgement in the discussion'], ['culture', 'Culture fit', 'Attitude, ownership, teamwork']];
+  const REC_META = { go: { label: 'Good to go', cls: 'b-good' }, hold: { label: 'On hold', cls: 'b-warn' }, no: { label: 'Not a fit', cls: 'b-bad' } };
+  const fbList = () => data.filter((d) => d.round2 && ['slot-set', 'sent'].includes(d.round2.status));
+  const myKey = () => (isMaster() ? 'master' : me.id);
+  const myReview = (d) => (d.reviews || []).find((r) => r.key === myKey());
+  const offerSt = (d) => (d.offer && d.offer.status) || 'none';
+  const needsMe = (d) => (isMaster() ? !(d.reviews || []).length : !myReview(d)) && !['accepted', 'declined'].includes(offerSt(d));
+  const fbCount = () => fbList().filter(needsMe).length;
+  const fbStage = (d) => { const o = offerSt(d); if (['sent', 'accepted', 'declined'].includes(o)) return 'sent'; if (['approved', 'ready'].includes(o)) return 'offer'; return (d.reviews || []).length ? 'feedback' : 'awaiting'; };
+  const OFFER_META = { none: null, approved: { label: 'Offer approved · salary pending', cls: 'b-info' }, ready: { label: 'Offer ready to send', cls: 'b-info' }, sent: { label: 'Offer sent', cls: 'b-good' }, accepted: { label: 'Offer accepted', cls: 'b-good' }, declined: { label: 'Offer declined', cls: 'b-bad' } };
+  const interviewOver = (d) => d.round2 && d.round2.slot && new Date(d.round2.slot.at).getTime() + (d.round2.slot.durationMin || 45) * 60000 < Date.now();
+
+  function reviewBlock(d) {
+    const rs = d.reviews || [];
+    if (!rs.length) return `<div class="rv-note">${interviewOver(d) ? 'Interview is over. Waiting for feedback.' : 'Opens after the interview.'}</div>`;
+    return rs.map((r) => `<div class="fb-r"><span class="badge ${REC_META[r.recommend].cls}">${REC_META[r.recommend].label}</span> <b>${r.overall}%</b> <small>${esc(r.by)}</small>${r.feedback ? `<div class="fb-t">${esc(r.feedback.length > 110 ? r.feedback.slice(0, 110) + '…' : r.feedback)}</div>` : ''}</div>`).join('');
+  }
+  function offerActions(d, after) {
+    const o = offerSt(d), M = isMaster(), has = (d.reviews || []).some((r) => r.recommend === 'go');
+    const out = [];
+    if (o === 'none' && has) out.push(`<button class="btn btn-primary btn-sm" data-fa="approve" data-id="${d.id}">${I('check', 14)} Make offer</button>`);
+    if (['approved', 'ready'].includes(o)) out.push(M ? `<button class="btn btn-primary btn-sm" data-fa="offer" data-id="${d.id}">${I('send', 14)} ${o === 'ready' ? 'Review & send offer' : 'Set salary & send offer'}</button>` : `<span class="rv-note">Waiting for HR to set the salary</span>`);
+    if (o === 'sent' && M) out.push(`<button class="btn btn-outline btn-sm" data-fa="offer" data-id="${d.id}">${I('mail', 14)} Offer details / resend</button><button class="btn btn-outline btn-sm" data-fa="accepted" data-id="${d.id}">${I('check', 14)} Accepted</button><button class="btn btn-outline btn-sm" data-fa="declined" data-id="${d.id}">${I('x', 14)} Declined</button>`);
+    if (['approved', 'ready'].includes(o) && M) out.push(`<button class="btn btn-outline btn-sm" data-fa="withdraw" data-id="${d.id}">${I('x', 14)} Withdraw</button>`);
+    return out.join('');
+  }
+  async function feedbackAction(act, id, after) {
+    const d = data.find((x) => x.id === id); if (!d) return;
+    if (act === 'view') { state.candidateId = id; return render(); }
+    if (act === 'review') return openFeedbackModal(d, after);
+    if (act === 'offer') return openOfferModal(d, after);
+    const msg = { approve: 'Make an offer to ' + d.candidate.fullName + '? HR will then set the salary and send it.', withdraw: 'Withdraw this offer?', accepted: 'Mark the offer as accepted? The candidate moves to Hired.', declined: 'Mark the offer as declined? The candidate moves to Rejected.' }[act];
+    if (msg && !confirm(msg)) return;
+    try { const s = await Store.offerAction(id, { action: act }); Object.assign(d, s); UI.toast({ approve: 'Offer approved. HR can now set the salary.', withdraw: 'Offer withdrawn', accepted: 'Marked as accepted', declined: 'Marked as declined' }[act], 'success'); }
+    catch (e) { UI.toast(e.message, 'error'); }
+    renderNav(); after();
+  }
+
+  function renderFeedback() {
+    const all = fbList();
+    const f = state.fbFilter || 'all';
+    const items = all.filter((d) => f === 'all' || fbStage(d) === f).sort((a, b) => (needsMe(b) - needsMe(a)) || new Date(a.round2.slot.at) - new Date(b.round2.slot.at));
+    const cnt = (k) => all.filter((d) => fbStage(d) === k).length;
+    view.innerHTML = `
+      <div class="page-head">
+        <div><h1>Interview feedback</h1><p>After the 2nd-round interview: score the candidate, say whether they are good to go, then make the offer${isMaster() ? ' · HR sets the salary and sends it' : ''}</p></div>
+        <div class="actions"><button class="btn btn-outline btn-sm" id="refreshBtn">${I('refresh', 15)} Refresh</button></div>
+      </div>
+      <div class="sec-tabs" id="fbTabs" style="margin-bottom:16px">
+        ${[['all', 'All', all.length], ['awaiting', 'Awaiting feedback', cnt('awaiting')], ['feedback', 'Feedback in', cnt('feedback')], ['offer', 'Offer in progress', cnt('offer')], ['sent', 'Offer sent', cnt('sent')]].map(([k, l, n]) => `<button class="sec-tab ${f === k ? 'active' : ''}" data-f="${k}">${esc(l)} (${n})</button>`).join('')}
+      </div>
+      <div class="rv-list">
+        ${items.length === 0 ? `<div class="table-wrap"><div class="empty"><div class="ei">${I('star', 24)}</div><h3>Nothing here yet</h3><p>Candidates appear once their 2nd-round interview is scheduled.</p></div></div>` : items.map((d) => {
+          const r2 = d.round2, om = OFFER_META[offerSt(d)], mine = myReview(d);
+          return `<div class="rv-card" data-id="${d.id}">
+            <div class="rv-main fb-main">
+              <div class="rv-c1"><div class="td-cand"><div class="av" style="background:${avColor(d.candidate.fullName)}">${initials(d.candidate.fullName)}</div><div><b>${esc(d.candidate.fullName)}</b><span>${esc(d.candidate.email)}</span></div></div></div>
+              <div class="rv-c2"><small>Role</small><b>${esc(d.positionTitle || d.roleTitle)}</b><span>AI score ${d.evaluation?.overall || 0}%</span></div>
+              <div class="rv-c2"><small>Interview</small><b>${esc(slotLabel(r2.slot.at))}</b><span>${r2.mode === 'onsite' ? 'On-site' : 'Online'}${r2.interviewer ? ' · ' + esc(r2.interviewer) : ''}</span></div>
+              <div class="rv-c5 fb-c4"><small>Panel feedback</small>${reviewBlock(d)}</div>
+              <div class="rv-c5"><small>Offer</small>${om ? `<span class="badge ${om.cls}">${om.label}</span>` : '<span class="rv-note">Not started</span>'}${d.offer && d.offer.send && d.offer.send.state === 'failed' ? `<div class="rv-note bad" title="${esc(d.offer.send.error)}">${I('alert', 11)} Email failed</div>` : ''}${d.offer && d.offer.send && d.offer.send.state === 'queued' ? `<div class="rv-note">Saved in Email outbox (email not connected)</div>` : ''}${d.offer && d.offer.salary && isMaster() ? `<div class="rv-note">PKR ${Number(d.offer.salary).toLocaleString()} / month</div>` : ''}</div>
+            </div>
+            <div class="rv-actions">
+              <button class="btn btn-outline btn-sm" data-fa="view" data-id="${d.id}">${I('right', 14)} View</button>
+              <button class="btn ${needsMe(d) ? 'btn-primary' : 'btn-outline'} btn-sm" data-fa="review" data-id="${d.id}">${I('star', 14)} ${mine ? 'Edit my feedback' : 'Give feedback'}</button>
+              ${offerActions(d)}
+            </div>
+          </div>`;
+        }).join('')}
+      </div>`;
+    $$('#fbTabs .sec-tab').forEach((b) => b.addEventListener('click', () => { state.fbFilter = b.dataset.f; renderFeedback(); }));
+    $('#refreshBtn').addEventListener('click', async () => { await loadData(); renderNav(); UI.toast('Refreshed', 'success'); renderFeedback(); });
+    $$('[data-fa]').forEach((b) => b.addEventListener('click', () => feedbackAction(b.dataset.fa, b.dataset.id, renderFeedback)));
+  }
+
+  function openFeedbackModal(d, after) {
+    const mine = myReview(d);
+    const ratings = Object.assign({ knowledge: 0, communication: 0, problem: 0, culture: 0 }, mine ? mine.ratings : {});
+    let rec = mine ? mine.recommend : '';
+    const others = (d.reviews || []).filter((r) => !mine || r.key !== mine.key);
+    modal(`
+      <div class="m-head"><div class="m-ico brand">${I('star', 20)}</div><div><h3>Interview feedback</h3><p>${esc(d.candidate.fullName)} · ${esc(d.positionTitle || d.roleTitle)} · AI score ${d.evaluation?.overall || 0}%</p></div></div>
+      <div class="m-body" style="max-height:66vh;overflow:auto">
+        ${d.round2 && d.round2.slot ? `<div class="slot-sum">${I('clock', 14)} Interview: <b>${esc(slotLabel(d.round2.slot.at))}</b>${d.round2.interviewer ? ' · with ' + esc(d.round2.interviewer) : ''}</div>` : ''}
+        <div class="fld"><span>Your scores (1 = weak, 5 = excellent)</span>
+          <div class="fb-crit">${FB_CRITERIA.map(([k, l, h]) => `<div class="fb-row"><div><b>${esc(l)}</b><small>${esc(h)}</small></div><div class="fb-pick" data-k="${k}">${[1, 2, 3, 4, 5].map((n) => `<button type="button" class="slot-chip ${ratings[k] === n ? 'on' : ''}" data-n="${n}">${n}</button>`).join('')}</div></div>`).join('')}</div>
+        </div>
+        <div class="fld"><span>Your recommendation</span>
+          <div class="fb-rec" id="fbRec">${[['go', 'Good to go', 'Recommend making an offer'], ['hold', 'On hold', 'Need more time or another round'], ['no', 'Not a fit', 'Do not proceed']].map(([k, l, h]) => `<button type="button" class="slot-chip ${rec === k ? 'on' : ''}" data-r="${k}"><b>${l}</b>${h}</button>`).join('')}</div>
+        </div>
+        <label class="fld"><span>Feedback</span><textarea class="inp" id="fbText" rows="5" placeholder="Strengths, concerns and what you saw in the interview…">${esc(mine ? mine.feedback : '')}</textarea></label>
+        ${others.length ? `<div class="fld"><span>Other feedback on this candidate</span>${others.map((r) => `<div class="fb-r" style="margin-top:6px"><span class="badge ${REC_META[r.recommend].cls}">${REC_META[r.recommend].label}</span> <b>${r.overall}%</b> <small>${esc(r.by)}</small><div class="fb-t">${esc(r.feedback)}</div></div>`).join('')}</div>` : ''}
+      </div>
+      <div class="m-foot"><button class="btn btn-outline" data-dismiss>Cancel</button><button class="btn btn-primary" id="fbSave">${I('check', 15)} Submit feedback</button></div>`, 'wide');
+    $$('.fb-pick').forEach((box) => $$('button', box).forEach((b) => b.addEventListener('click', () => { ratings[box.dataset.k] = +b.dataset.n; $$('button', box).forEach((x) => x.classList.toggle('on', x === b)); })));
+    $$('#fbRec button').forEach((b) => b.addEventListener('click', () => { rec = b.dataset.r; $$('#fbRec button').forEach((x) => x.classList.toggle('on', x === b)); }));
+    $('#fbSave').addEventListener('click', async () => {
+      if (Object.values(ratings).some((v) => !v)) return UI.toast('Please score all four criteria', 'error');
+      if (!rec) return UI.toast('Please choose Good to go / On hold / Not a fit', 'error');
+      const feedback = $('#fbText').value.trim();
+      if (rec !== 'hold' && feedback.length < 10) return UI.toast('Please add a short feedback note', 'error');
+      const btn = $('#fbSave'); btn.disabled = true;
+      try { const s = await Store.submitReview(d.id, { ratings, recommend: rec, feedback }); Object.assign(d, s); }
+      catch (e) { btn.disabled = false; return UI.toast(e.message, 'error'); }
+      closeModal(); UI.toast('Feedback saved', 'success'); renderNav(); after();
+    });
+    attachModalCloses();
+  }
+
+  function openOfferModal(d, after) {
+    const o = d.offer || {};
+    const exp = d.candidate.expectedSalary, cur = d.candidate.currentSalary;
+    modal(`
+      <div class="m-head"><div class="m-ico brand">${I('send', 20)}</div><div><h3>Job offer</h3><p>${esc(d.candidate.fullName)} · ${esc(d.positionTitle || d.roleTitle)}</p></div></div>
+      <div class="m-body" style="max-height:68vh;overflow:auto">
+        <div class="slot-sum" style="flex-wrap:wrap">${I('people', 14)} Candidate expects <b>${exp ? 'PKR ' + Number(exp).toLocaleString() : 'not stated'}</b>${cur ? ' · currently earns PKR ' + Number(cur).toLocaleString() : ''} · panel average <b>${(d.reviews || []).length ? Math.round(d.reviews.reduce((t, r) => t + r.overall, 0) / d.reviews.length) + '%' : '-'}</b></div>
+        <label class="fld"><span>Monthly gross salary offered (PKR)</span><input class="inp" id="ofSal" type="number" min="1000" step="500" value="${o.salary || ''}" placeholder="e.g. 85000"></label>
+        <label class="fld"><span>Proposed joining date (optional)</span><input class="inp" id="ofJoin" type="date" value="${esc(o.joiningDate || '')}"></label>
+        <label class="fld"><span>Note in the email (optional)</span><textarea class="inp" id="ofNote" rows="2" placeholder="e.g. Please bring your original documents on the first day">${esc(o.note || '')}</textarea></label>
+        <div id="ofPrev"></div>
+        ${o.send && o.send.state === 'failed' ? `<div class="slot-sum" style="color:var(--bad)">${I('alert', 14)} Last send failed: ${esc(o.send.error)}</div>` : ''}
+        <div class="slot-sum" id="ofMail">${I('mail', 14)} ${Store.serverInfo && Store.serverInfo.mail ? 'The offer is emailed from the platform mailbox.' : 'Email is not connected yet: sending saves the offer in Email outbox. The Apps Script mailer will be connected later.'}</div>
+      </div>
+      <div class="m-foot"><button class="btn btn-outline" data-dismiss>Close</button><button class="btn btn-outline" id="ofPrevBtn">${I('eye', 14)} Preview email</button><button class="btn btn-primary" id="ofSend">${I('send', 15)} ${offerSt(d) === 'sent' ? 'Save & resend' : 'Save & send offer'}</button></div>`, 'wide');
+    const save = async () => {
+      const salary = +$('#ofSal').value;
+      if (!(salary >= 1000)) { UI.toast('Enter the monthly salary (PKR)', 'error'); return false; }
+      const s = await Store.offerAction(d.id, { action: 'prepare', salary, joiningDate: $('#ofJoin').value, note: $('#ofNote').value.trim() });
+      Object.assign(d, s); return true;
+    };
+    $('#ofPrevBtn').addEventListener('click', async () => {
+      try { if (!(await save())) return; const p = await Store.offerAction(d.id, { action: 'preview' }); $('#ofPrev').innerHTML = `<div style="font-size:13px;margin:6px 0"><b>To:</b> ${esc(p.to)}<br><b>Subject:</b> ${esc(p.subject)}</div><div style="border:1px solid var(--line);border-radius:10px;padding:14px;max-height:260px;overflow:auto;background:#fff;color:#1a1f36">${p.html}</div>`; }
+      catch (e) { UI.toast(e.message, 'error'); }
+    });
+    $('#ofSend').addEventListener('click', async () => {
+      const btn = $('#ofSend'); btn.disabled = true;
+      try {
+        if (!(await save())) { btn.disabled = false; return; }
+        const s = await Store.offerAction(d.id, { action: 'send' }); Object.assign(d, s);
+        closeModal();
+        UI.toast(d.offer.send && d.offer.send.state === 'queued' ? 'Saved in Email outbox (email is not connected yet)' : 'Offer emailed to ' + d.candidate.fullName, 'success');
+      } catch (e) { btn.disabled = false; UI.toast('Could not send: ' + e.message, 'error'); try { await loadData(); } catch (x) {} return; }
+      renderNav(); after();
+    });
+    attachModalCloses();
+  }
+
+  // ---------- Department setup (master): which roles belong to which department / HOD ----------
   async function renderOrg() {
     let org; try { org = await Store.getOrg(); } catch (e) { view.innerHTML = `<div class="empty"><h3>Could not load</h3><p>${esc(e.message)}</p></div>`; return; }
     const deps = org.departments.map((x) => Object.assign({}, x, { roleKeys: (x.roleKeys || []).slice() }));
@@ -1069,7 +1254,7 @@
       const free = Object.entries(B.ROLES).filter(([k]) => !used.has(k));
       view.innerHTML = `
         <div class="page-head">
-          <div><h1>Org structure</h1><p>Departments and the roles that belong to them. HODs only see candidates of the departments assigned to them (Users tab).</p></div>
+          <div><h1>Department setup</h1><p>Which roles belong to each department. HODs only see candidates of the departments assigned to them (Users tab). The team tree is in <b>Org structure</b>.</p></div>
           <div class="actions"><button class="btn btn-outline btn-sm" id="addDep">${I('plus', 15)} Add department</button> <button class="btn btn-primary btn-sm" id="saveOrg">${I('check', 15)} Save structure</button></div>
         </div>
         ${free.length ? `<div class="slot-sum" style="margin-bottom:14px">${I('alert', 14)} Not in any department (visible to master only): <b>${free.map(([, r]) => esc(r.title)).join(', ')}</b></div>` : ''}
@@ -1085,7 +1270,7 @@
       $('#addDep').addEventListener('click', () => { deps.push({ id: '', name: '', roleKeys: [] }); draw(); });
       $('#saveOrg').addEventListener('click', async () => {
         if (deps.some((x) => !x.name.trim())) return UI.toast('Every department needs a name', 'error');
-        try { const saved = await Store.saveOrg({ departments: deps }); deps.splice(0, deps.length, ...saved.departments); me = await Store.me(); UI.toast('Org structure saved', 'success'); renderNav(); draw(); }
+        try { const saved = await Store.saveOrg({ departments: deps }); deps.splice(0, deps.length, ...saved.departments); me = await Store.me(); UI.toast('Department setup saved', 'success'); renderNav(); draw(); }
         catch (e) { UI.toast('Could not save: ' + e.message, 'error'); }
       });
     };
@@ -1123,7 +1308,7 @@
         <label class="fld"><span>Email (login)</span><input class="inp" id="uEmail" type="email" value="${esc(u ? u.email : '')}" placeholder="name@dvago.com"></label>
         <label class="fld"><span>${u && u.hasPassword ? 'New password (leave empty to keep)' : 'Password (min 8 characters)'}</span><div style="display:flex;gap:8px"><input class="inp" id="uPass" style="flex:1" value="${u && u.hasPassword ? '' : gen()}"><button type="button" class="btn btn-outline btn-sm" id="uGen">Generate</button></div></label>
         <label class="fld" style="flex-direction:row;gap:8px;align-items:center"><input type="checkbox" id="uAll" ${u && u.allDepartments ? 'checked' : ''}> <span>All departments (CEO: sees everything, with a department filter)</span></label>
-        <div class="fld"><span>Departments</span><div class="slot-chips" id="uDeps">${org.departments.map((x) => `<button type="button" class="slot-chip ${u && u.departmentIds.includes(x.id) ? 'on' : ''}" data-id="${esc(x.id)}">${esc(x.name)}</button>`).join('') || 'No departments yet. Create them in the Org structure tab.'}</div></div>
+        <div class="fld"><span>Departments</span><div class="slot-chips" id="uDeps">${org.departments.map((x) => `<button type="button" class="slot-chip ${u && u.departmentIds.includes(x.id) ? 'on' : ''}" data-id="${esc(x.id)}">${esc(x.name)}</button>`).join('') || 'No departments yet. Create them in the Department setup tab.'}</div></div>
         ${u ? `<label class="fld" style="flex-direction:row;gap:8px;align-items:center"><input type="checkbox" id="uActive" ${u.active ? 'checked' : ''}> <span>Account active</span></label>` : ''}
       </div>
       <div class="m-foot"><button class="btn btn-outline" data-dismiss>Cancel</button><button class="btn btn-primary" id="uSave">${I('check', 15)} ${u ? 'Save' : 'Create user'}</button></div>`);
@@ -1232,27 +1417,82 @@
           ${!list.length ? `<p class="muted" style="margin:8px 0">${d.members.length ? 'No one matches this filter.' : 'No team members yet.' + (M ? ' Use Add to create the first one.' : '')}</p>` : ''}
         </div></div>`;
     };
-    view.innerHTML = `<div class="page-head"><div><h1>Team hierarchy</h1><p>${M ? 'Structure of every department. You can edit it.' : 'Structure of your department(s).'} · ${all.length} positions · ${nAct} active · ${nVac} vacant</p></div></div>
+    // ---- tree view: company -> departments -> head + designation branches -> people. Big branches start collapsed so nothing gets crowded. ----
+    const searching = !!(q || f.status);
+    const isOpen = (key, dflt) => (searching ? true : (f.open && key in f.open ? f.open[key] : dflt));
+    const caret = (open) => `<span class="ot-caret ${open ? 'open' : ''}">${I('right', 13)}</span>`;
+    const chip = (x, showDes) => {
+      const vac = x.status === 'Vacant';
+      return `<button type="button" class="ot-p ${vac ? 'vac' : ''} ${x.isHead ? 'head' : ''}" data-hp="${esc(x.id)}" title="${esc((vac ? 'Vacant' : x.name) + ' · ' + x.designation)}"><i class="av" style="background:${vac ? 'var(--line-2)' : avColor(x.name)}">${vac ? '?' : initials(x.name)}</i><span><b>${vac ? 'Vacant' : esc(x.name)}</b>${showDes || vac ? `<small>${esc(vac && x.vacatedName ? 'was ' + x.vacatedName : x.designation)}</small>` : ''}</span></button>`;
+    };
+    const li = (inner, kids) => `<li>${inner}${kids ? `<ul>${kids}</ul>` : ''}</li>`;
+    const deptNode = (d) => {
+      const list = d.members.filter(match);
+      if ((q || f.status) && !list.length) return '';
+      const open = isOpen(d.id, true);
+      const heads = list.filter((x) => x.isHead);
+      const groups = {}; list.filter((x) => !x.isHead).forEach((x) => { (groups[x.designation] = groups[x.designation] || []).push(x); });
+      const keys = Object.keys(groups).sort((a, b) => hierRank(a) - hierRank(b) || a.localeCompare(b));
+      const act = d.members.filter((x) => x.status !== 'Vacant').length, vac = d.members.length - act;
+      let kids = '';
+      if (open) {
+        kids += heads.map((x) => li(`<div class="ot-n head">${chip(x, true)}</div>`)).join('');
+        kids += keys.map((k) => {
+          const g = groups[k], gk = d.id + '|' + k, gopen = isOpen(gk, g.length <= 6);
+          return li(`<div class="ot-n grp ${gopen ? 'is-open' : ''}"><button type="button" class="ot-g" data-tg="${esc(gk)}" data-dflt="${g.length <= 6 ? 1 : 0}">${caret(gopen)}<b>${esc(k)}</b><em>${g.length}</em></button></div>`,
+            gopen ? li(`<div class="ot-people">${g.map((x) => chip(x, false)).join('')}</div>`) : '');
+        }).join('');
+        if (!list.length) kids = li(`<div class="ot-n empty-n">No team members yet${M ? '' : ''}</div>`);
+      }
+      return li(`<div class="ot-n dept ${open ? 'is-open' : ''}"><button type="button" class="ot-g" data-tg="${esc(d.id)}" data-dflt="1">${caret(open)}<b>${esc(d.name)}</b></button>
+          <div class="ot-sub">${d.hods.length ? 'HOD: ' + d.hods.map(esc).join(', ') : '<i>no HOD account yet</i>'}</div>
+          <div class="ot-stats"><span class="badge b-good">${act} active</span>${vac ? `<span class="badge b-bad">${vac} vacant</span>` : ''}${M ? `<button type="button" class="btn btn-outline btn-sm" data-hadd="${esc(d.id)}">${I('plus', 13)} Add</button>` : ''}</div></div>`, kids);
+    };
+    const deptTrees = depts.map(deptNode).join('');
+    const multi = depts.length > 1;
+    const rootOpen = isOpen('root', true);
+    const tree = !depts.length ? '' : (multi
+      ? `<ul class="ot-root">${li(`<div class="ot-n root ${rootOpen ? 'is-open' : ''}"><button type="button" class="ot-g" data-tg="root" data-dflt="1">${caret(rootOpen)}<b>DVAGO</b></button><div class="ot-sub">${depts.length} departments</div><div class="ot-stats"><span class="badge b-good">${nAct} active</span>${nVac ? `<span class="badge b-bad">${nVac} vacant</span>` : ''}</div></div>`, rootOpen ? deptTrees : '')}</ul>`
+      : `<ul class="ot-root">${deptTrees}</ul>`);
+    const mode = f.mode || 'tree';
+    view.innerHTML = `<div class="page-head"><div><h1>Org structure</h1><p>${M ? 'Structure of every department. Click a person to edit.' : 'Your team, by branch.'} · ${all.length} positions · ${nAct} active · ${nVac} vacant</p></div>
+        <div class="actions"><div class="seg">${[['tree', 'Tree'], ['list', 'List']].map(([k, l]) => `<button class="btn btn-sm ${mode === k ? 'btn-primary' : 'btn-outline'}" data-hm="${k}">${l}</button>`).join('')}</div></div></div>
       <div class="h-tools"><input class="inp" id="hQ" placeholder="Search name or designation" value="${esc(f.q)}" style="max-width:300px">
-        ${[['', 'All'], ['Active', 'Active'], ['Vacant', 'Vacant']].map(([k, l]) => `<button class="btn btn-sm ${f.status === k ? 'btn-primary' : 'btn-outline'}" data-hs="${k}">${l}</button>`).join('')}</div>
-      ${depts.length ? depts.map(block).join('') : `<div class="empty"><h3>No hierarchy to show</h3><p>${M ? 'Pick a department or add people.' : 'No department is assigned to your account yet.'}</p></div>`}`;
+        ${[['', 'All'], ['Active', 'Active'], ['Vacant', 'Vacant']].map(([k, l]) => `<button class="btn btn-sm ${f.status === k ? 'btn-primary' : 'btn-outline'}" data-hs="${k}">${l}</button>`).join('')}
+        ${mode === 'tree' ? `<span style="margin-left:auto;display:flex;gap:8px"><button class="btn btn-sm btn-outline" id="hExp">Expand all</button><button class="btn btn-sm btn-outline" id="hCol">Collapse all</button></span>` : ''}</div>
+      ${!depts.length ? `<div class="empty"><h3>No hierarchy to show</h3><p>${M ? 'Pick a department or add people.' : 'No department is assigned to your account yet.'}</p></div>`
+        : mode === 'tree' ? (deptTrees ? `<div class="otree">${tree}</div>` : `<div class="empty"><h3>No one matches this filter</h3></div>`) : depts.map(block).join('')}`;
     const qEl = $('#hQ');
     if (qEl) qEl.addEventListener('input', () => { f.q = qEl.value; const p = qEl.selectionStart; renderHierarchy(false).then(() => { const e = $('#hQ'); if (e) { e.focus(); try { e.setSelectionRange(p, p); } catch (_) {} } }); });
     $$('[data-hs]').forEach((b) => b.addEventListener('click', () => { f.status = b.dataset.hs; renderHierarchy(false); }));
+    $$('[data-hm]').forEach((b) => b.addEventListener('click', () => { f.mode = b.dataset.hm; renderHierarchy(false); }));
+    $$('[data-tg]').forEach((b) => b.addEventListener('click', () => { f.open = f.open || {}; const k = b.dataset.tg; f.open[k] = !isOpen(k, b.dataset.dflt === '1'); renderHierarchy(false); }));
+    const setAll = (open) => { f.open = { root: true }; H.departments.forEach((d) => { f.open[d.id] = true; new Set(d.members.map((x) => x.designation)).forEach((k) => { f.open[d.id + '|' + k] = open; }); }); renderHierarchy(false); };
+    const ex = $('#hExp'), co = $('#hCol'); if (ex) ex.addEventListener('click', () => setAll(true)); if (co) co.addEventListener('click', () => setAll(false));
     if (!M) return;
     const find = (id) => all.find((x) => x.id === id);
     const refresh = async (msg) => { if (msg) UI.toast(msg, 'success'); closeModal(); await renderHierarchy(true); };
-    $$('[data-hadd]').forEach((b) => b.addEventListener('click', () => openMemberModal(null, b.dataset.hadd, H, refresh)));
-    $$('[data-hedit]').forEach((b) => b.addEventListener('click', () => openMemberModal(find(b.dataset.hedit), null, H, refresh)));
-    $$('[data-hvac]').forEach((b) => b.addEventListener('click', async () => {
-      const x = find(b.dataset.hvac); if (!x) return;
+    const doVac = async (x) => {
       if (x.status === 'Vacant') return openMemberModal(x, null, H, refresh, true);
       try { await Store.updateMember(x.id, { status: 'Vacant' }); await refresh(x.name + ' marked vacant'); } catch (e) { UI.toast(e.message, 'error'); }
-    }));
-    $$('[data-hdel]').forEach((b) => b.addEventListener('click', () => {
-      const x = find(b.dataset.hdel); if (!x) return;
+    };
+    const doDel = (x) => {
       modal(`<div class="m-head"><div class="m-ico bad">${I('alert', 20)}</div><div><h3>Remove this position?</h3><p>${esc(x.name || 'Vacant position')} · ${esc(x.designation)}. To keep the position but empty it, use Vacate instead.</p></div></div><div class="m-foot"><button class="btn btn-outline" data-dismiss>Cancel</button><button class="btn btn-danger" id="hDelOk">Remove</button></div>`);
       $('#hDelOk').addEventListener('click', async () => { try { await Store.deleteMember(x.id); await refresh('Removed'); } catch (e) { UI.toast(e.message, 'error'); } });
+      attachModalCloses();
+    };
+    $$('[data-hadd]').forEach((b) => b.addEventListener('click', () => openMemberModal(null, b.dataset.hadd, H, refresh)));
+    $$('[data-hedit]').forEach((b) => b.addEventListener('click', () => openMemberModal(find(b.dataset.hedit), null, H, refresh)));
+    $$('[data-hvac]').forEach((b) => b.addEventListener('click', () => { const x = find(b.dataset.hvac); if (x) doVac(x); }));
+    $$('[data-hdel]').forEach((b) => b.addEventListener('click', () => { const x = find(b.dataset.hdel); if (x) doDel(x); }));
+    // Tree: click a person -> small action sheet
+    $$('[data-hp]').forEach((b) => b.addEventListener('click', () => {
+      const x = find(b.dataset.hp); if (!x) return; const vac = x.status === 'Vacant';
+      modal(`<div class="m-head"><div class="m-ico brand">${I('people', 20)}</div><div><h3>${vac ? 'Vacant position' : esc(x.name)}</h3><p>${esc(x.designation)}${x.isHead ? ' · Head of department' : ''}${vac && x.vacatedName ? ' · previously ' + esc(x.vacatedName) : ''}</p></div></div>
+        <div class="m-foot" style="flex-wrap:wrap;gap:8px"><button class="btn btn-outline" data-dismiss>Close</button><button class="btn btn-outline" id="paDel">${I('trash', 14)} Remove</button><button class="btn btn-outline" id="paVac">${vac ? 'Fill position' : 'Mark vacant'}</button><button class="btn btn-primary" id="paEdit">${I('eye', 14)} Edit</button></div>`);
+      $('#paEdit').addEventListener('click', () => { closeModal(); openMemberModal(x, null, H, refresh); });
+      $('#paVac').addEventListener('click', () => { closeModal(); doVac(x); });
+      $('#paDel').addEventListener('click', () => { closeModal(); doDel(x); });
       attachModalCloses();
     }));
   }
@@ -1415,16 +1655,33 @@
   }
 
   // ---------- Roles & Questions (full editor) ----------
+  // Editor keys: a department key, or "pos:<positionId>" for one position's own (JD-based) questions.
+  const posOfKey = (k) => (String(k).startsWith('pos:') ? String(k).slice(4) : null);
+  let editorPositions = [];
+  const deptOfKey = (k) => { const pid = posOfKey(k); if (!pid) return k; const p = editorPositions.find((x) => x.id === pid); return p ? p.roleKey : Object.keys(B.ROLES)[0]; };
+  const rqOf = (k) => B.roleQuestions(deptOfKey(k));
+  const titleOfKey = (k) => { const pid = posOfKey(k); if (!pid) return (B.ROLES[k] || {}).title || k; const p = editorPositions.find((x) => x.id === pid); return p ? p.title : k; };
+
   async function renderRoles() {
-    const roleKey = state.rqRole || Object.keys(B.ROLES)[0];
-    const r = B.ROLES[roleKey];
+    try { editorPositions = await Store.listPositions(); } catch (e) { editorPositions = []; }
+    let pqInfo = {}; try { pqInfo = await Store.positionQuestionInfo(); } catch (e) {}
+    let roleKey = state.rqRole || Object.keys(B.ROLES)[0];
+    if (posOfKey(roleKey) && !editorPositions.some((p) => p.id === posOfKey(roleKey))) roleKey = state.rqRole = Object.keys(B.ROLES)[0];
+    const pid = posOfKey(roleKey);
+    const r = Object.assign({}, B.ROLES[deptOfKey(roleKey)], { title: titleOfKey(roleKey) });
     const tab = state.rqTab || 'sjt';
+    const opts = Object.entries(B.ROLES).map(([k, d]) => `<optgroup label="${esc(d.title)}"><option value="${k}" ${roleKey === k ? 'selected' : ''}>${esc(d.title)} · department questions</option>${editorPositions.filter((p) => p.roleKey === k).map((p) => `<option value="pos:${esc(p.id)}" ${roleKey === 'pos:' + p.id ? 'selected' : ''}>↳ ${esc(p.title)}${pqInfo[p.id] && pqInfo[p.id].has ? ' ✓' : ''}</option>`).join('')}</optgroup>`).join('');
+    const pinfo = pid ? (pqInfo[pid] || { has: false }) : null;
     view.innerHTML = `<div class="page-head">
-        <div><h1>Roles &amp; Questions</h1><p>Edit, add and delete every assessment question for each DVAGO role.</p></div>
+        <div><h1>Roles &amp; Questions</h1><p>Questions for each department, or for one specific position (built from its JD). A position without its own questions uses its department's.</p></div>
         <div class="actions">
-          <label class="chip-sel active">${I('target', 14)}<select id="rqRoleSel">${Object.entries(B.ROLES).map(([k, r]) => `<option value="${k}" ${roleKey === k ? 'selected' : ''}>${esc(r.title)}</option>`).join('')}</select></label>
+          <label class="chip-sel active">${I('target', 14)}<select id="rqRoleSel">${opts}</select></label>
         </div>
       </div>
+      ${pid ? `<div class="slot-sum" style="margin-bottom:14px;display:flex;gap:12px;align-items:center;flex-wrap:wrap;justify-content:space-between">
+        <span>${I('target', 14)} <b>${esc(r.title)}</b> · ${pinfo.has ? `JD-based questions active${pinfo.generatedAt ? ' (AI-generated ' + esc(new Date(pinfo.generatedAt).toLocaleDateString('en-GB')) + ')' : ' (edited)'}` : 'no position questions yet: this position currently uses its department questions'}</span>
+        <span style="display:flex;gap:8px"><button class="btn btn-primary btn-sm" id="pqGen">${I('zap', 14)} ${pinfo.has ? 'Regenerate from JD' : 'Generate from JD'} (AI)</button>${pinfo.has ? `<button class="btn btn-outline btn-sm" id="pqReset">${I('refresh', 14)} Use department questions</button>` : ''}</span>
+      </div>` : ''}
       <div class="sec-tabs" style="margin-bottom:16px" id="rqTabs">
         <button class="sec-tab ${tab === 'voice' ? 'active' : ''}" data-t="voice">${I('mic', 14)} Voice interview</button>
         <button class="sec-tab ${tab === 'sjt' ? 'active' : ''}" data-t="sjt">${I('compass', 14)} Decision scenarios</button>
@@ -1436,6 +1693,17 @@
       <div id="rqBody">Loading…</div>`;
     $('#rqRoleSel').addEventListener('change', (e) => { state.rqRole = e.target.value; render(); });
     $$('#rqTabs .sec-tab').forEach((b) => b.addEventListener('click', () => { state.rqTab = b.dataset.t; render(); }));
+    if (pid) {
+      const gen = $('#pqGen');
+      gen.addEventListener('click', async () => {
+        if (pinfo.has && !confirm('Replace this position\'s questions with new ones generated from its JD? Your manual edits to them will be lost.')) return;
+        gen.disabled = true; gen.innerHTML = `${I('refresh', 14)} Generating… (about 20 seconds)`;
+        try { await Store.generatePositionQuestions(pid); UI.toast('Questions generated from the JD', 'success'); } catch (e) { UI.toast(e.message, 'error'); }
+        render();
+      });
+      const rs = $('#pqReset');
+      if (rs) rs.addEventListener('click', async () => { if (!confirm('Remove this position\'s own questions? It will use the department questions again.')) return; try { await Store.resetPositionQuestions(pid); UI.toast('Using department questions', 'success'); } catch (e) { UI.toast(e.message, 'error'); } render(); });
+    }
 
     const body = $('#rqBody');
     if (tab === 'voice') { state.vqRole = roleKey; await renderVoiceInline(body, roleKey); }
@@ -1443,16 +1711,16 @@
     else if (tab === 'sim') await renderSimInline(body, roleKey, r);
     else if (tab === 'case') await renderCaseInline(body, roleKey, r);
     else if (tab === 'reas') await renderReasInline(body);
-    else if (tab === 'chal') await renderChallengeInline(body, roleKey, r);
+    else if (tab === 'chal') await renderChallengeInline(body, deptOfKey(roleKey), B.ROLES[deptOfKey(roleKey)]);
   }
 
   async function renderVoiceInline(body, roleKey) {
     let items;
     try {
       const list = await Store.listVoiceQuestions(roleKey);
-      items = (Array.isArray(list) && list.length) ? list : B.roleQuestions(roleKey).voice;
+      items = (Array.isArray(list) && list.length) ? list : rqOf(roleKey).voice;
     } catch (e) {
-      items = B.roleQuestions(roleKey).voice;
+      items = rqOf(roleKey).voice;
     }
     body.innerHTML = `<div class="table-wrap">
       <div class="table-ctrls" style="justify-content:space-between">
@@ -1481,7 +1749,7 @@
 
   async function renderSJTInline(body, roleKey, r) {
     let items = []; try { items = await Store.listSJT(roleKey) || []; } catch (e) {}
-    if (!items.length) items = B.roleQuestions(roleKey).sjt.slice((B.COMMON_SJT || []).length);
+    if (!items.length) items = rqOf(roleKey).sjt.slice((B.COMMON_SJT || []).length);
     body.innerHTML = `<div class="table-wrap">
       <div class="table-ctrls" style="justify-content:space-between">
         <div style="color:var(--muted);font-size:13px">${items.length} scenario${items.length === 1 ? '' : 's'} (plus 2 shared "common" scenarios)</div>
@@ -1554,7 +1822,7 @@
 
   async function renderSimInline(body, roleKey, r) {
     let sim = null; try { sim = await Store.getSimulation(roleKey); } catch (e) {}
-    if (!sim) sim = JSON.parse(JSON.stringify(B.roleQuestions(roleKey).simulation));
+    if (!sim) sim = JSON.parse(JSON.stringify(rqOf(roleKey).simulation));
     body.innerHTML = `<div class="table-wrap"><div style="padding:20px 24px;display:flex;flex-direction:column;gap:14px">
       <div style="display:flex;justify-content:space-between;align-items:center">
         <div style="color:var(--muted);font-size:13px">One job-simulation task per role (ranking exercise)</div>
@@ -1603,7 +1871,7 @@
 
   async function renderCaseInline(body, roleKey, r) {
     let cs = null; try { cs = await Store.getCaseStudy(roleKey); } catch (e) {}
-    if (!cs) cs = JSON.parse(JSON.stringify(B.roleQuestions(roleKey).caseStudy));
+    if (!cs) cs = JSON.parse(JSON.stringify(rqOf(roleKey).caseStudy));
     cs.exhibit = cs.exhibit || { caption: '', headers: ['Metric', 'Value'], rows: [] };
     body.innerHTML = `<div class="table-wrap"><div style="padding:20px 24px;display:flex;flex-direction:column;gap:14px">
       <div style="display:flex;justify-content:space-between;align-items:center">
@@ -1893,10 +2161,17 @@
   }
 
   // ---------- Demo seed ----------
+  async function doUnseed() {
+    if (!window.DVAGO_DEMO || !window.confirm('Remove the sample (demo) candidates? Your real candidates are not touched.')) return;
+    const r = await window.DVAGO_DEMO.unseed();
+    UI.toast(`Removed ${r.removed} demo candidates`, 'success');
+    await loadData();
+    render();
+  }
   async function doSeed() {
     if (!window.DVAGO_DEMO) return;
     const r = await window.DVAGO_DEMO.seed();
-    UI.toast(r.created ? `Loaded ${r.created} demo candidates` : 'Data already exists', 'success');
+    UI.toast(r.created ? `Loaded ${r.created} demo candidates (your real candidates are unchanged)` : 'Demo data is already loaded', 'success');
     await loadData();
     render();
   }

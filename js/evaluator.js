@@ -241,8 +241,9 @@
     };
   }
 
-  function evaluate(sub, settings) {
-    const rq = BANK.roleQuestions(sub.role);
+  // rqOverride: the exact question set the interview used (position-specific questions); falls back to the saved copy, then the department bank.
+  function evaluate(sub, settings, rqOverride) {
+    const rq = rqOverride || sub.qset || BANK.roleQuestions(sub.role);
     if (!rq) throw new Error('Unknown role ' + sub.role);
     const ans = sub.answers || {};
     const acc = {};

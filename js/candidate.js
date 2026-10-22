@@ -85,9 +85,19 @@
   const first = () => ((S && S.candidate.fullName) || '').trim().split(/\s+/)[0] || '';
   const role = () => B.ROLES[S.role];
   const rq = () => S._customRQ || B.roleQuestions(S.role);
+  // The server resolves the whole set for this position (JD-based questions when the position has them, else the department's), so scoring uses the same questions.
+  async function fetchQuestionSet(roleKey) {
+    try {
+      const set = await Store.getQuestionSet(roleKey, S.position && S.position.id);
+      if (set && Array.isArray(set.sjt) && set.sjt.length && set.simulation && set.caseStudy && Array.isArray(set.voice) && set.voice.length) return set;
+    } catch (e) {}
+    return null;
+  }
   async function fetchAllOverrides(roleKey) {
     const base = B.roleQuestions(roleKey);
     const out = { voice: base.voice, sjt: base.sjt, simulation: base.simulation, caseStudy: base.caseStudy, reasoning: base.reasoning };
+    const full = S._qset || await fetchQuestionSet(roleKey);
+    if (full) return Object.assign(out, full);
     try {
       const [sjt, sim, cs, reas, chal] = await Promise.all([
         Store.listSJT(roleKey).catch(() => null),
@@ -1149,7 +1159,10 @@
     $('#back').addEventListener('click', () => go('profile'));
     $('#go').addEventListener('click', async () => {
       // Pre-fetch admin-overridden voice questions for this role so renderVoice uses them
-      try { S._voiceOverride = await fetchVoiceQuestions(S.role); } catch (e) { S._voiceOverride = null; }
+      try {
+        S._qset = await fetchQuestionSet(S.role);
+        S._voiceOverride = S._qset ? S._qset.voice : await fetchVoiceQuestions(S.role);
+      } catch (e) { S._qset = null; S._voiceOverride = null; }
       if (!sr || !micOk) {
         const m = modal(`<div class="m-ico">${I('keyboard', 30)}</div><h3 class="h3">${sr ? 'Microphone not confirmed' : 'Typing mode'}</h3>
           <p>${sr ? 'We could not confirm your microphone. You can continue and try speaking, or type your answers instead.' : 'Your browser does not support voice answers. You will type your answers instead — that is completely fine.'}</p>
@@ -2008,7 +2021,7 @@
         timings: { assessmentSeconds: Math.round((new Date(S.exam.completedAt || now) - new Date(S.exam.startedAt)) / 1000), totalSeconds: Math.round((now - new Date(S.createdAt)) / 1000) },
         stage: 'New', notes: '', rating: 0, userAgent: navigator.userAgent
       };
-      sub.evaluation = DIA_EVAL.evaluate(sub, settings);
+      sub.evaluation = DIA_EVAL.evaluate(sub, settings, rq());
       await Store.saveSubmission(sub);
       S.submissionId = id;
       S.result = { ref: id, strengths: (sub.evaluation.strengths || []).slice(0, 3) };

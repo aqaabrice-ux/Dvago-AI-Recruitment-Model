@@ -291,6 +291,24 @@
         return { ok: true };
       },
   
+      // ----- question set for one interview (server: position's JD-based questions, else department's) -----
+      async getQuestionSet(roleKey, positionId) {
+        await init();
+        if (mode !== 'server') return null;
+        return api('question-set?role=' + encodeURIComponent(roleKey) + '&position=' + encodeURIComponent(positionId || ''));
+      },
+      // ----- JD-based questions per position (admin) -----
+      async positionQuestionInfo() { await init(); return mode === 'server' ? api('position-questions') : {}; },
+      async getPositionQuestions(id) { await init(); return api('position-questions/' + encodeURIComponent(id)); },
+      async generatePositionQuestions(id) { await init(); return api('position-questions/' + encodeURIComponent(id) + '/generate', { method: 'POST', body: {} }); },
+      async resetPositionQuestions(id) { await init(); return api('position-questions/' + encodeURIComponent(id), { method: 'DELETE' }); },
+      async generateMissingQuestions(all) { await init(); return api('position-questions/generate-missing', { method: 'POST', body: { all: !!all } }); },
+      async questionJobStatus() { await init(); return api('position-questions/status'); },
+
+      // ----- post-interview feedback and offers (server mode) -----
+      async submitReview(id, body) { await init(); return api('submissions/' + encodeURIComponent(id) + '/review', { method: 'POST', body }); },
+      async offerAction(id, body) { await init(); return api('submissions/' + encodeURIComponent(id) + '/offer', { method: 'POST', body }); },
+
       // ----- SJT (decision scenarios) -----
       async listSJT(roleKey) {
         await init();
