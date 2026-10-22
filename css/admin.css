@@ -345,3 +345,23 @@ textarea.inp { padding: 12px 14px; height: auto; min-height: 80px; resize: verti
 .dept-switch { display: flex; align-items: center; gap: 8px; margin: 0 0 12px; padding: 9px 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface, #fff); font-size: 13px; font-weight: 600; color: var(--text, inherit); }
 .dept-switch select { flex: 1; min-width: 0; border: 0; background: transparent; font: inherit; color: inherit; outline: none; cursor: pointer; }
 .dept-switch.one span { flex: 1; }
+
+/* ---- Team hierarchy ---- */
+.h-tools { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-bottom: 14px; }
+.h-dept { margin-bottom: 18px; }
+.h-head { margin-bottom: 14px; }
+.h-group { margin-top: 14px; }
+.h-gt { font-size: 12px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; color: var(--muted); margin-bottom: 8px; display: flex; gap: 8px; align-items: center; }
+.h-gt span { background: var(--surface-2); border: 1px solid var(--line); border-radius: 999px; padding: 0 8px; font-size: 11px; }
+.h-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 10px; }
+.h-card { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); flex-wrap: wrap; }
+.h-card.head { border-color: var(--brand-dark); background: var(--brand-pale); max-width: 420px; }
+.h-card.vac { border-style: dashed; background: var(--surface-2); }
+.h-card .av { width: 36px; height: 36px; border-radius: 50%; display: grid; place-items: center; color: #fff; font-weight: 700; font-size: 13px; flex: none; }
+.h-meta { display: flex; flex-direction: column; min-width: 0; flex: 1; }
+.h-meta b { font-size: 14px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.h-meta span { font-size: 12.5px; color: var(--muted); }
+.h-meta small { font-size: 11.5px; color: var(--muted); }
+.h-act { display: flex; gap: 6px; width: 100%; padding-top: 6px; }
+.h-act .btn { flex: 1; }
+.h-act .btn:last-child { flex: none; }
