@@ -98,9 +98,11 @@ if (!db.users) db.users = {};
 // v:3 = real DVAGO departments from the HR roles sheet. An older structure is replaced once; edits saved from the admin keep v:3.
 if (!db.org || !Array.isArray(db.org.departments) || (db.org.v || 0) < 3) {
   db.org = { v: 3, departments: [
-    { id: 'operations', name: 'Operations', roleKeys: ['branch-operations', 'business-operations', 'warehouse'] },
+    { id: 'operations', name: 'Operations', roleKeys: ['branch-operations', 'business-operations'] },
+    { id: 'warehouse', name: 'Warehouse', roleKeys: ['warehouse'] },
     { id: 'ecommerce', name: 'E-Commerce', roleKeys: ['ecommerce'] },
-    { id: 'sales', name: 'Commercial & Corporate Sales', roleKeys: ['commercial', 'corporate-sales'] },
+    { id: 'commercial', name: 'Commercial', roleKeys: ['commercial'] },
+    { id: 'corporate-sales', name: 'Corporate Sales', roleKeys: ['corporate-sales'] },
     { id: 'finance', name: 'Finance', roleKeys: ['finance', 'business-analytics'] },
     { id: 'business-planning', name: 'Business Planning & Demand Planning', roleKeys: ['planning-distribution'] },
     { id: 'people-culture', name: 'People & Culture', roleKeys: ['hr'] },
@@ -109,6 +111,7 @@ if (!db.org || !Array.isArray(db.org.departments) || (db.org.v || 0) < 3) {
     { id: 'it', name: 'Business Application & IT', roleKeys: ['business-application', 'it'] },
     { id: 'marketing', name: 'Marketing', roleKeys: ['marketing'] }
   ] };
+  db.orgSplitV = 1;   // this default already has Commercial / Corporate Sales / Warehouse as separate departments
   const okIds = new Set(db.org.departments.map((d) => d.id));
   Object.values(db.users).forEach((u) => { u.departmentIds = (u.departmentIds || []).filter((id) => okIds.has(id)); });
 }
@@ -135,12 +138,15 @@ if (db.deptV !== 3) {
   console.log(`[migrate] Departments v3 · ${Object.keys(db.positions).length} positions`);
 }
 // One-time HOD accounts from the org chart. No password is set: the master opens Users, sets the real email + a password for each.
+const mkHod = (name, email, deps, all) => { if (Object.values(db.users).some((x) => x.email === email)) return; const id = 'u-' + crypto.randomBytes(5).toString('hex'); db.users[id] = { id, name, email, passHash: '', departmentIds: deps, allDepartments: !!all, active: true, createdAt: new Date().toISOString() }; };
 if (!db.hodSeeded) {
-  const mk = (name, email, deps, all) => { if (Object.values(db.users).some((x) => x.email === email)) return; const id = 'u-' + crypto.randomBytes(5).toString('hex'); db.users[id] = { id, name, email, passHash: '', departmentIds: deps, allDepartments: !!all, active: true, createdAt: new Date().toISOString() }; };
+  const mk = mkHod;
   mk('Wasif Khan', 'wasif@dvago.pk', [], true);
   mk('Masood Ahmed Khan', 'masood.ahmed@dvago.pk', ['operations']);
   mk('Salman Hanif', 'salmanhanif@gatron-novatex.com', ['ecommerce']);
-  mk('Ali Haider', 'ali.haider@dvago.pk', ['sales']);
+  mk('Ali Haider', 'ali.haider@dvago.pk', ['commercial']);
+  mk('Usman Khalid', 'usman.khalid@dvago.pk', ['corporate-sales']);
+  mk('Faraz Hussain', 'faraz.hussain@dvago.pk', ['warehouse']);
   mk('Oan Hussain Ali', 'oan.hussain@dvago.pk', ['finance', 'business-planning']);
   mk('Sarah Munawar', 'sarah.munawar@dvago.pk', ['people-culture', 'fm-ce']);
   mk('Rezwan Uddin', 'rezwan.uddin@dvago.pk', ['audit-security']);
@@ -153,6 +159,39 @@ if (db.hodEmailV !== 1) {
   const real = { 'masood@dvago.pk': 'masood.ahmed@dvago.pk', 'salman.hanif@dvago.pk': 'salmanhanif@gatron-novatex.com', 'oan@dvago.pk': 'oan.hussain@dvago.pk', 'sarah.munawar@dvago.pk': 'sarah.munawar@dvago.pk', 'rezwan@dvago.pk': 'rezwan.uddin@dvago.pk', 'rehan@dvago.pk': 'rehan.jawaid@dvago.pk', 'salman.syed@dvago.pk': 'syedmuhammad.salman@dvago.pk' };
   Object.values(db.users).forEach((u) => { const r = real[u.email]; if (r && u.email !== r && !Object.values(db.users).some((x) => x.email === r)) u.email = r; });
   db.hodEmailV = 1; setTimeout(() => persist(), 0);
+}
+// One-time org split on existing data: "Commercial & Corporate Sales" -> Commercial (Ali Haider) + Corporate Sales (Usman Khalid), and Warehouse leaves Operations (Faraz Hussain).
+if (db.orgSplitV !== 1) {
+  const deps = db.org.departments;
+  const has = (rk) => deps.some((d) => (d.roleKeys || []).includes(rk));
+  const sales = deps.find((d) => d.id === 'sales');
+  if (sales) {
+    sales.id = 'commercial'; sales.name = 'Commercial'; sales.roleKeys = (sales.roleKeys || []).filter((k) => k !== 'corporate-sales');
+    if (!sales.roleKeys.includes('commercial')) sales.roleKeys.push('commercial');
+    Object.values(db.users).forEach((u) => { u.departmentIds = (u.departmentIds || []).map((id) => (id === 'sales' ? 'commercial' : id)); });
+  }
+  if (!has('corporate-sales') && !deps.some((d) => d.id === 'corporate-sales')) deps.push({ id: 'corporate-sales', name: 'Corporate Sales', roleKeys: ['corporate-sales'] });
+  const ops = deps.find((d) => (d.roleKeys || []).includes('warehouse') && d.id !== 'warehouse');
+  if (ops) ops.roleKeys = ops.roleKeys.filter((k) => k !== 'warehouse');
+  if (!has('warehouse') && !deps.some((d) => d.id === 'warehouse')) deps.push({ id: 'warehouse', name: 'Warehouse', roleKeys: ['warehouse'] });
+  mkHod('Usman Khalid', 'usman.khalid@dvago.pk', ['corporate-sales']);
+  mkHod('Faraz Hussain', 'faraz.hussain@dvago.pk', ['warehouse']);
+  db.orgSplitV = 1; setTimeout(() => persist(), 0);
+  console.log('[migrate] Org split: Commercial / Corporate Sales / Warehouse');
+}
+// Team hierarchy (from hierarchy.xlsx): seeded once from hierarchy-seed.json. After that the master edits it in the admin "Hierarchy" tab.
+if (!db.hierarchy) {
+  db.hierarchy = { v: 1, members: {} };
+  try {
+    const seed = JSON.parse(fs.readFileSync(path.join(__dirname, 'hierarchy-seed.json'), 'utf8'));
+    let n = 0;
+    Object.entries(seed.departments || {}).forEach(([deptId, list]) => list.forEach((p, i) => {
+      const id = 'h-' + crypto.randomBytes(5).toString('hex');
+      db.hierarchy.members[id] = { id, deptId, name: p.name, designation: p.designation, isHead: !!p.isHead, status: 'Active', order: n++ };
+    }));
+    console.log(`[seed] Hierarchy: ${n} people`);
+  } catch (e) { console.warn('[seed] hierarchy-seed.json not loaded:', e.message); }
+  setTimeout(() => persist(), 0);
 }
 // Seed default positions on first run
 if (Object.keys(db.positions).length === 0 && BANK.DEFAULT_POSITIONS) {
@@ -1238,6 +1277,59 @@ async function api(req, res, url) {
     }
   }
 
+  // ---- team hierarchy: each HOD reads the structure of their own departments; only the master edits ----
+  if (r0 === 'hierarchy') {
+    if (needAdmin()) return;
+    const isM = admin.role === 'master';
+    const hu = isM ? null : db.users[admin.userId];
+    const mine = new Set(isM || (hu && hu.allDepartments) ? deptList().map((d) => d.id) : ((hu && hu.departmentIds) || []));
+    const members = () => db.hierarchy.members;
+    const pubM = (x) => pick(x, ['id', 'deptId', 'name', 'designation', 'isHead', 'status', 'vacatedName', 'vacatedAt']);
+    if (!r1 && m === 'GET') {
+      const departments = deptList().filter((d) => mine.has(d.id)).map((d) => ({
+        id: d.id, name: d.name,
+        hods: Object.values(db.users).filter((x) => x.active !== false && (x.departmentIds || []).includes(d.id)).map((x) => x.name),
+        members: Object.values(members()).filter((x) => x.deptId === d.id).sort((a, b) => (a.order || 0) - (b.order || 0)).map(pubM)
+      }));
+      return send(res, 200, { canEdit: isM, departments });
+    }
+    if (needMaster()) return;
+    const str = (v, n) => String(v == null ? '' : v).replace(/\s+/g, ' ').trim().slice(0, n);
+    const setHead = (x) => { Object.values(members()).forEach((y) => { if (y.deptId === x.deptId && y.id !== x.id) y.isHead = false; }); };
+    const apply = (x, b) => {
+      if (b.deptId !== undefined) { if (!deptList().some((d) => d.id === b.deptId)) return 'Unknown department'; x.deptId = b.deptId; }
+      if (b.designation !== undefined) x.designation = str(b.designation, 90);
+      if (b.name !== undefined) x.name = str(b.name, 80);
+      if (b.status !== undefined) {
+        const to = b.status === 'Vacant' ? 'Vacant' : 'Active';
+        if (to === 'Vacant' && x.status !== 'Vacant') { if (x.name) { x.vacatedName = x.name; x.vacatedAt = new Date().toISOString(); } x.name = ''; }
+        if (to === 'Active') { x.vacatedAt = null; }
+        x.status = to;
+      }
+      if (b.isHead !== undefined) { x.isHead = !!b.isHead; if (x.isHead) setHead(x); }
+      if (!x.designation) return 'Designation is required';
+      if (x.status !== 'Vacant' && !x.name) return 'Name is required (or mark the position Vacant)';
+      return null;
+    };
+    if (!r1 && m === 'POST') {
+      const b = await readBody(req);
+      const id = 'h-' + crypto.randomBytes(5).toString('hex');
+      const x = { id, deptId: '', name: '', designation: '', isHead: false, status: 'Active', order: Math.max(0, ...Object.values(members()).map((y) => y.order || 0)) + 1 };
+      const err = apply(x, { deptId: b.deptId, name: b.name, designation: b.designation, status: b.status, isHead: b.isHead });
+      if (err) return send(res, 400, { error: err });
+      members()[id] = x; persist(); return send(res, 201, pubM(x));
+    }
+    const x = members()[r1];
+    if (!x) return send(res, 404, { error: 'Not found' });
+    if (m === 'PATCH') {
+      const b = await readBody(req);
+      const err = apply(x, b);
+      if (err) return send(res, 400, { error: err });
+      persist(); return send(res, 200, pubM(x));
+    }
+    if (m === 'DELETE') { delete members()[r1]; persist(); return send(res, 200, { ok: true }); }
+  }
+
   // ---- org structure (master edits, anyone signed in can read their own via /me) ----
   if (r0 === 'org') {
     if (needMaster()) return;
@@ -1253,7 +1345,7 @@ async function api(req, res, url) {
         return { id, name, roleKeys: [...new Set(((d && d.roleKeys) || []).filter((k) => BANK.ROLES[k]))] };
       });
       if (deps.some((d) => !d.name)) return send(res, 400, { error: 'Every department needs a name' });
-      db.org = { v: 2, departments: deps };
+      db.org = { v: 3, departments: deps };   // must stay >= 3 or the start-up check above would reset the master's edits to the default list
       // drop deleted departments from users
       Object.values(db.users).forEach((u) => { u.departmentIds = (u.departmentIds || []).filter((id) => seen.has(id)); });
       db.hodSeeded = true;
