@@ -35,6 +35,7 @@ const os = require('os');
 const BANK = require('./js/questions.js');
 const EVAL = require('./js/evaluator.js');
 const mailer = require('./mailer.js');
+const posq = require('./posq.js');
 
 const ROOT = __dirname;
 // DATA_DIR lets a hosted deploy keep db.json, resumes, videos and audio on a persistent volume (e.g. Railway Volume mounted at /data).
@@ -94,7 +95,7 @@ try { db = Object.assign(db, JSON.parse(fs.readFileSync(DB_FILE, 'utf8'))); } ca
 if (!db.positions) db.positions = {};
 if (!db.applications) db.applications = {};
 if (!db.users) db.users = {};
-// Org structure: HOD groupings -> the department keys (BANK.ROLES) they own. Edited by the master in the admin "Org structure" tab.
+// Org structure: HOD groupings -> the department keys (BANK.ROLES) they own. Edited by the master in the admin "Department setup" tab.
 // v:3 = real DVAGO departments from the HR roles sheet. An older structure is replaced once; edits saved from the admin keep v:3.
 if (!db.org || !Array.isArray(db.org.departments) || (db.org.v || 0) < 3) {
   db.org = { v: 3, departments: [
@@ -179,7 +180,7 @@ if (db.orgSplitV !== 1) {
   db.orgSplitV = 1; setTimeout(() => persist(), 0);
   console.log('[migrate] Org split: Commercial / Corporate Sales / Warehouse');
 }
-// Team hierarchy (from hierarchy.xlsx): seeded once from hierarchy-seed.json. After that the master edits it in the admin "Hierarchy" tab.
+// Team hierarchy (from hierarchy.xlsx): seeded once from hierarchy-seed.json. After that the master edits it in the admin "Org structure" tab.
 if (!db.hierarchy) {
   db.hierarchy = { v: 1, members: {} };
   try {
@@ -200,6 +201,22 @@ if (Object.keys(db.positions).length === 0 && BANK.DEFAULT_POSITIONS) {
   }));
   console.log(`[seed] Loaded ${Object.keys(db.positions).length} default positions`);
 }
+// JD-based interview questions per position (position-questions-seed.json, made by tools/gen-position-questions.js).
+// Each position is seeded once; after that the master's edits / "Reset to department questions" are kept.
+db.positionQuestions = db.positionQuestions || {};
+db.posqSeeded = db.posqSeeded || {};
+try {
+  const seedFile = path.join(__dirname, 'position-questions-seed.json');
+  if (fs.existsSync(seedFile)) {
+    let n = 0;
+    Object.entries(JSON.parse(fs.readFileSync(seedFile, 'utf8'))).forEach(([id, q]) => {
+      if (db.posqSeeded[id] || !db.positions[id]) return;
+      db.posqSeeded[id] = true;
+      if (!db.positionQuestions[id] && q && q.sjt && q.simulation && q.caseStudy) { db.positionQuestions[id] = q; n++; }
+    });
+    if (n) { console.log(`[seed] Position questions: ${n} positions now have JD-based questions`); setTimeout(() => persist(), 0); }
+  }
+} catch (e) { console.warn('[seed] position-questions-seed.json not loaded:', e.message); }
 let saveTimer = null;
 function persist() {
   clearTimeout(saveTimer);
@@ -267,6 +284,83 @@ function readBody(req) {
 const pick = (o, keys) => Object.fromEntries(keys.filter((k) => o[k] !== undefined).map((k) => [k, o[k]]));
 const settings = () => Object.assign({}, DEFAULT_SETTINGS, db.settings);
 const listSubs = () => Object.values(db.submissions).map((s) => { const c = Object.assign({}, s); if (c.resume) c.resume = pick(c.resume, ['name', 'type', 'size', 'file']); return c; }).sort((a, b) => (b.completedAt || '').localeCompare(a.completedAt || ''));
+// ---- question sets ----
+// Editor keys: a department key, or "pos:<positionId>" for one position's own (JD-based) questions.
+function qTarget(key, coll, field) {
+  let pid = null, roleKey = String(key || '');
+  if (roleKey.startsWith('pos:')) { pid = roleKey.slice(4); const p = db.positions[pid]; if (!p) return null; roleKey = p.roleKey; }
+  if (!BANK.ROLES[roleKey]) return null;
+  if (!pid) return { isPos: false, roleKey, get: () => (db[coll] || {})[roleKey] || null, set: (v) => { db[coll] = db[coll] || {}; db[coll][roleKey] = v; }, del: () => { if (db[coll]) delete db[coll][roleKey]; } };
+  const pq = () => db.positionQuestions[pid];
+  return {
+    isPos: true, roleKey, pid, get: () => (pq() || {})[field] || null,
+    set: (v) => { db.positionQuestions[pid] = Object.assign(pq() || {}, { [field]: v }); db.posqSeeded[pid] = true; },
+    del: () => { const q = pq(); if (q) { delete q[field]; if (!q.sjt && !q.simulation && !q.caseStudy && !q.voice) delete db.positionQuestions[pid]; } db.posqSeeded[pid] = true; }
+  };
+}
+// The exact question set one interview uses: department defaults -> department edits (Questions Editor) -> this position's JD-based questions.
+// The candidate portal shows it and the evaluator scores against it, so both always agree.
+function resolveQuestions(roleKey, positionId) {
+  const base = BANK.roleQuestions(roleKey); if (!base) return null;
+  const C = BANK.COMMON_SJT || [];
+  const out = { voice: base.voice, sjt: base.sjt, simulation: base.simulation, caseStudy: base.caseStudy, reasoning: db.reasoningQuestions || base.reasoning, source: 'department' };
+  const ds = (db.sjtQuestions || {})[roleKey]; if (Array.isArray(ds) && ds.length) out.sjt = C.concat(ds.filter((q) => !C.find((c) => c.id === q.id)));
+  const dv = (db.voiceQuestions || {})[roleKey]; if (Array.isArray(dv) && dv.length) out.voice = dv;
+  const dsim = (db.simulations || {})[roleKey]; if (dsim && dsim.title) out.simulation = dsim;
+  const dcs = (db.caseStudies || {})[roleKey]; if (dcs && Array.isArray(dcs.questions) && dcs.questions.length) out.caseStudy = dcs;
+  const ch = (db.challenges || {})[roleKey]; if (ch && Array.isArray(ch.tiles) && ch.tiles.length >= 4) out.challenge = ch;
+  const pos = positionId && db.positions[positionId];
+  const pq = pos && pos.roleKey === roleKey && db.positionQuestions[positionId];
+  if (pq) {
+    if (Array.isArray(pq.sjt) && pq.sjt.length) { out.sjt = C.concat(pq.sjt.filter((q) => !C.find((c) => c.id === q.id))); out.source = 'position'; }
+    if (Array.isArray(pq.voice) && pq.voice.length) { out.voice = (BANK.VOICE_COMMON || []).concat(pq.voice); out.source = 'position'; }
+    if (pq.simulation && pq.simulation.title) { out.simulation = pq.simulation; out.source = 'position'; }
+    if (pq.caseStudy && Array.isArray(pq.caseStudy.questions) && pq.caseStudy.questions.length) { out.caseStudy = pq.caseStudy; out.source = 'position'; }
+  }
+  return out;
+}
+// ---- after the 2nd-round interview: panel feedback and the job offer ----
+const REVIEW_CRITERIA = ['knowledge', 'communication', 'problem', 'culture'];
+function cleanReview(b, who) {
+  const s = (v, n) => String(v == null ? '' : v).trim().slice(0, n);
+  const ratings = {}; REVIEW_CRITERIA.forEach((k) => { ratings[k] = Math.max(1, Math.min(5, Math.round(Number(b.ratings && b.ratings[k]) || 0)) || 3); });
+  const overall = Math.round(REVIEW_CRITERIA.reduce((t, k) => t + ratings[k], 0) / REVIEW_CRITERIA.length * 20);
+  return { key: who.key, by: who.name, byRole: who.role, at: new Date().toISOString(), ratings, overall, recommend: ['go', 'hold', 'no'].includes(b.recommend) ? b.recommend : 'hold', feedback: s(b.feedback, 2000) };
+}
+const reviewerKey = (a) => (a.role === 'master' ? 'master' : a.userId);
+function buildOfferEmail(sub) {
+  const o = sub.offer || {}, c = sub.candidate || {};
+  const first = String(c.fullName || 'there').trim().split(/\s+/)[0];
+  const pos = sub.positionTitle || sub.roleTitle || 'the position';
+  const sal = 'PKR ' + Number(o.salary || 0).toLocaleString('en-US');
+  const join = o.joiningDate ? new Date(o.joiningDate + 'T00:00:00').toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' }) : '';
+  const rows = [['Position', pos], ['Department', sub.roleTitle || ''], ['Monthly gross salary', sal]];
+  if (join) rows.push(['Proposed joining date', join]);
+  const intro = `We are delighted to offer you the position of ${pos} at DVAGO. Thank you for the time and effort you put into our interview process.`;
+  const outro = 'To accept this offer, please reply to this email. A formal appointment letter with the full terms will follow once you accept. This offer is subject to document verification.';
+  const text = [`Dear ${first},`, '', intro, '', rows.map(([k, v]) => `${k}: ${v}`).join('\n'), o.note ? '\nNote: ' + o.note : '', '', outro, '', 'Best regards,', R2_SENDER_NAME, 'DVAGO'].join('\n');
+  const tr = rows.map(([k, v]) => `<tr><td style="padding:6px 16px 6px 0;color:#667;white-space:nowrap">${hesc(k)}</td><td style="padding:6px 0"><b>${hesc(v)}</b></td></tr>`).join('');
+  const html = `<div style="font-family:Arial,Helvetica,sans-serif;font-size:14px;line-height:1.6;color:#1a1f36"><p>Dear ${hesc(first)},</p><p>${hesc(intro)}</p><table style="border-collapse:collapse;margin:12px 0">${tr}</table>${o.note ? `<p><b>Note:</b> ${hesc(o.note)}</p>` : ''}<p>${hesc(outro)}</p><p>Best regards,<br>${hesc(R2_SENDER_NAME)}<br>DVAGO</p></div>`;
+  return { to: c.email || '', subject: `Job offer – DVAGO (${pos})`, html, text };
+}
+// Offer email. Sent through the platform mailer (SMTP) for now; set OFFER_SCRIPT_URL + OFFER_SCRIPT_KEY to hand it to an Apps Script web app instead
+// (same request shape as the Round 2 script: { key, to, subject, html, text, kind:'offer' }).
+async function sendOfferEmail(sub) {
+  const mail = buildOfferEmail(sub);
+  if (!/^\S+@\S+\.\S+$/.test(mail.to)) throw Object.assign(new Error('Candidate has no valid email'), { status: 400 });
+  if (process.env.OFFER_SCRIPT_URL && process.env.OFFER_SCRIPT_KEY) {
+    const res = await fetch(process.env.OFFER_SCRIPT_URL, { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' }, body: JSON.stringify({ key: process.env.OFFER_SCRIPT_KEY, kind: 'offer', to: mail.to, name: sub.candidate.fullName, senderName: R2_SENDER_NAME, subject: mail.subject, html: mail.html, text: mail.text }) });
+    let out; try { out = JSON.parse(await res.text()); } catch (e) { throw Object.assign(new Error('Offer email script returned an unexpected response'), { status: 502 }); }
+    if (!out || !out.ok) throw Object.assign(new Error((out && out.error) || 'Offer email script failed'), { status: 502 });
+    return { state: 'sent', via: 'script' };
+  }
+  const r = await mailer.send({ to: mail.to, subject: mail.subject, html: mail.html, text: mail.text, meta: { kind: 'offer', refId: sub.id } });
+  if (r.status === 'sent') return { state: 'sent', via: 'smtp' };
+  if (r.status === 'failed') throw Object.assign(new Error(r.error || 'Email failed'), { status: 502 });
+  return { state: 'queued', via: 'outbox' };   // email is not configured: the offer is saved in Email outbox only
+}
+// HODs never see salary figures (HR sets and sends the offer).
+const forAdmin = (sub, a) => { if (!a || a.role === 'master' || !sub.offer || sub.offer.salary == null) return sub; const c = Object.assign({}, sub); c.offer = Object.assign({}, sub.offer); delete c.offer.salary; delete c.offer.note; return c; };
 // Round-2 review record (admin-only): whitelist + clamp every field so a bad PATCH can't store junk.
 function cleanRound2(r) {
   if (!r || typeof r !== 'object') return null;
@@ -317,12 +411,22 @@ function buildRound2Email(sub) {
     ? 'Please join a few minutes early and make sure your camera, microphone and internet connection are working.'
     : 'Please arrive about 10 minutes early and carry a valid ID (CNIC).';
   const resched = 'If this time does not work for you, simply reply to this email and we will arrange another slot.';
-  const text = [`Dear ${first},`, '', intro, '', rows.map(([k, val]) => `${k}: ${val}`).join('\n'), r2.note ? '\nNote: ' + r2.note : '', '', outro, resched, '', 'Best regards,', R2_SENDER_NAME, 'DVAGO'].join('\n');
+  // How to join an online interview (Google Meet): what to do, what to prepare, what to do if something goes wrong.
+  const joinSteps = [
+    ['Open the meeting link', 'Click the "Meeting link" above (or the "Join with Google Meet" button in the Google Calendar invitation you will receive) a few minutes before your start time. It works on a laptop in Chrome or Edge, or on a phone with the Google Meet app.'],
+    ['Allow camera and microphone', 'When your browser asks, click "Allow" for both. Please keep your camera on for the whole interview.'],
+    ['Enter the meeting', 'Join with your full name as it appears on your resume. If you see "Ask to join", click it and wait a moment: the interviewer will admit you. You do not need to create any account.'],
+    ['Be ready', 'Sit in a quiet, well-lit place with a stable internet connection, use headphones if you can, and keep your CNIC and resume handy. Dress as you would for an office interview.'],
+    ['If something goes wrong', 'If the link does not open, or you are running late or cannot join, reply to this email right away and we will help you or arrange another slot.']
+  ];
+  const text = [`Dear ${first},`, '', intro, '', rows.map(([k, val]) => `${k}: ${val}`).join('\n'), r2.note ? '\nNote: ' + r2.note : '', '', outro, resched,
+    online ? '\nHow to join the online interview:\n' + joinSteps.map(([h, d], i) => `${i + 1}. ${h}: ${d}`).join('\n') : '', '', 'Best regards,', R2_SENDER_NAME, 'DVAGO'].join('\n');
   const tr = rows.map(([k, val]) => {
     const cell = k === 'Meeting link' ? `<a href="{{MEET_LINK}}">{{MEET_LINK}}</a>` : k === 'Map' ? `<a href="{{VENUE_MAP}}">{{VENUE_MAP}}</a>` : hesc(val);
     return `<tr><td style="padding:6px 16px 6px 0;color:#667;white-space:nowrap">${hesc(k)}</td><td style="padding:6px 0"><b>${cell}</b></td></tr>`;
   }).join('');
-  const html = `<div style="font-family:Arial,Helvetica,sans-serif;font-size:14px;line-height:1.6;color:#1a1f36"><p>Dear ${hesc(first)},</p><p>${hesc(intro)}</p><table style="border-collapse:collapse;margin:12px 0">${tr}</table>${r2.note ? `<p><b>Note:</b> ${hesc(r2.note)}</p>` : ''}<p>${hesc(outro)}</p><p>${hesc(resched)}</p><p>Best regards,<br>${hesc(R2_SENDER_NAME)}<br>DVAGO</p></div>`;
+  const joinHtml = online ? `<div style="margin:16px 0;padding:14px 16px;background:#f4f8ef;border-left:4px solid #78B943;border-radius:6px"><p style="margin:0 0 8px"><b>How to join the online interview</b></p><ol style="margin:0;padding-left:20px">${joinSteps.map(([h, d]) => `<li style="margin:0 0 6px"><b>${hesc(h)}.</b> ${hesc(d)}</li>`).join('')}</ol></div>` : '';
+  const html = `<div style="font-family:Arial,Helvetica,sans-serif;font-size:14px;line-height:1.6;color:#1a1f36"><p>Dear ${hesc(first)},</p><p>${hesc(intro)}</p><table style="border-collapse:collapse;margin:12px 0">${tr}</table>${r2.note ? `<p><b>Note:</b> ${hesc(r2.note)}</p>` : ''}<p>${hesc(outro)}</p>${joinHtml}<p>${hesc(resched)}</p><p>Best regards,<br>${hesc(R2_SENDER_NAME)}<br>DVAGO</p></div>`;
   return { to: c.email || '', subject: `Shortlisted for the next round – DVAGO (${sub.roleTitle || 'Interview'})`, html, text, online };
 }
 async function sendRound2(sub) {
@@ -737,7 +841,7 @@ async function aiEvaluate(id) {
   const sub = db.submissions[id];
   if (!sub) throw Object.assign(new Error('Not found'), { status: 404 });
   if (!aiEnabled()) throw Object.assign(new Error('AI evaluation is not configured. Run "npm install" and set ANTHROPIC_API_KEY.'), { status: 400 });
-  const rq = BANK.roleQuestions(sub.role);
+  const rq = sub.qset || BANK.roleQuestions(sub.role);
   const role = BANK.ROLES[sub.role];
   const ev = sub.evaluation;
   const caseBlock = rq.caseStudy.questions.map((q) => `<case_question id="${q.id}">\n${q.q}\nKey points a strong answer covers: ${q.rubric.map((r) => r.point).join('; ')}\n<candidate_answer>\n${(sub.answers.case || {})[q.id] || '(no answer)'}\n</candidate_answer>\n</case_question>`).join('\n\n');
@@ -798,6 +902,8 @@ Score each case question 0-100 against its key points, practicality and judgemen
   persist();
   return sub;
 }
+
+const posqJob = { running: false, total: 0, done: 0, failed: [] };
 
 // ---------------- API router ----------------
 async function api(req, res, url) {
@@ -1078,6 +1184,54 @@ async function api(req, res, url) {
     if (m === 'DELETE') { if (needMaster()) return; delete db.positions[r1]; persist(); return send(res, 200, { ok: true }); }
   }
 
+  // ---- the question set for one interview (candidate portal; public like the other question endpoints) ----
+  if (r0 === 'question-set' && m === 'GET') {
+    const rk = url.searchParams.get('role') || '', pid = url.searchParams.get('position') || '';
+    const set = resolveQuestions(rk, pid);
+    if (!set) return send(res, 404, { error: 'Unknown role' });
+    return send(res, 200, set);
+  }
+
+  // ---- JD-based questions per position (admin) ----
+  if (r0 === 'position-questions') {
+    if (needAdmin()) return;
+    const info = (id) => { const q = db.positionQuestions[id]; return q ? { has: true, generatedAt: q.generatedAt || null, model: q.model || '', parts: ['sjt', 'simulation', 'caseStudy', 'voice'].filter((k) => q[k] && (!Array.isArray(q[k]) || q[k].length)) } : { has: false }; };
+    if (!r1 && m === 'GET') return send(res, 200, Object.fromEntries(Object.keys(db.positions).map((id) => [id, info(id)])));
+    if (r1 === 'generate-missing' && m === 'POST') {
+      if (needMaster()) return;
+      if (!groqEnabled()) return send(res, 400, { error: 'Groq is not configured (GROQ_API_KEY)' });
+      const b = await readBody(req);
+      if (posqJob.running) return send(res, 200, posqJob);
+      const ids = Object.keys(db.positions).filter((id) => db.positions[id].isActive !== false && (b.all || !db.positionQuestions[id]));
+      Object.assign(posqJob, { running: true, total: ids.length, done: 0, failed: [], startedAt: new Date().toISOString() });
+      (async () => {
+        for (const id of ids) {
+          const p = db.positions[id]; if (!p) { posqJob.done++; continue; }
+          try { db.positionQuestions[id] = await posq.generate({ dept: (BANK.ROLES[p.roleKey] || {}).departmentName || p.roleKey, title: p.title, jd: p.jd, id }, groqChat); db.posqSeeded[id] = true; persist(); }
+          catch (e) { posqJob.failed.push(p.title + ': ' + e.message.slice(0, 80)); }
+          posqJob.done++;
+          await new Promise((r) => setTimeout(r, 1500));
+        }
+        posqJob.running = false;
+      })();
+      return send(res, 200, posqJob);
+    }
+    if (r1 === 'status' && m === 'GET') return send(res, 200, posqJob);
+    const pos = db.positions[r1];
+    if (!pos) return send(res, 404, { error: 'Position not found' });
+    if (m === 'GET') return send(res, 200, db.positionQuestions[r1] || null);
+    if (m === 'POST' && r2 === 'generate') {
+      if (needMaster()) return;
+      if (!groqEnabled()) return send(res, 400, { error: 'Groq is not configured (set GROQ_API_KEY in .env)' });
+      try {
+        const q = await posq.generate({ dept: (BANK.ROLES[pos.roleKey] || {}).departmentName || pos.roleKey, title: pos.title, jd: pos.jd, id: r1 }, groqChat);
+        db.positionQuestions[r1] = q; db.posqSeeded[r1] = true; persist();
+        return send(res, 200, q);
+      } catch (e) { return send(res, 502, { error: 'Could not generate: ' + e.message }); }
+    }
+    if (m === 'DELETE') { if (needMaster()) return; delete db.positionQuestions[r1]; db.posqSeeded[r1] = true; persist(); return send(res, 200, { ok: true }); }
+  }
+
   // ---- email outbox (admin) ----
   if (r0 === 'emails' && m === 'GET') {
     if (needMaster()) return;
@@ -1090,15 +1244,17 @@ async function api(req, res, url) {
     const list = (rk) => BANK.ROLES[rk] ? (db.sjtQuestions[rk] || BANK.roleQuestions(rk).sjt) : null;
     if (!r1 && m === 'GET') {
       const rk = url.searchParams.get('role');
+      if (rk && rk.startsWith('pos:')) { const T = qTarget(rk, 'sjtQuestions', 'sjt'); return send(res, 200, (T && T.get()) || []); }
       return send(res, 200, rk ? (list(rk) || []) : Object.fromEntries(Object.keys(BANK.ROLES).map((k) => [k, list(k)])));
     }
-    if (r1 && m === 'GET') return send(res, 200, list(r1) || []);
+    if (r1 && m === 'GET') { const T = qTarget(r1, 'sjtQuestions', 'sjt'); return send(res, 200, T && T.isPos ? (T.get() || []) : (list(r1) || [])); }
     if (r1 && m === 'PUT') {
       if (needMaster()) return;
-      if (!BANK.ROLES[r1]) return send(res, 400, { error: 'Unknown role' });
+      const T = qTarget(r1, 'sjtQuestions', 'sjt');
+      if (!T) return send(res, 400, { error: 'Unknown role' });
       const b = await readBody(req);
       if (!Array.isArray(b.items)) return send(res, 400, { error: 'items array required' });
-      db.sjtQuestions[r1] = b.items.map((it) => ({
+      const saved = b.items.map((it) => ({
         id: it.id || 'sjt-' + Math.random().toString(36).slice(2, 8),
         title: String(it.title || '').slice(0, 120),
         scenario: String(it.scenario || '').slice(0, 2000),
@@ -1106,29 +1262,30 @@ async function api(req, res, url) {
         options: Array.isArray(it.options) ? it.options.slice(0, 4).map((o) => ({ t: String(o.t || ''), s: Math.max(0, Math.min(3, Number(o.s) || 0)) })) : [],
         comp: Array.isArray(it.comp) ? it.comp.filter((c) => typeof c === 'string') : ['decision']
       }));
-      persist();
-      return send(res, 200, db.sjtQuestions[r1]);
+      T.set(saved); persist();
+      return send(res, 200, saved);
     }
-    if (r1 && m === 'DELETE') { if (needMaster()) return; delete db.sjtQuestions[r1]; persist(); return send(res, 200, { ok: true }); }
+    if (r1 && m === 'DELETE') { if (needMaster()) return; const T = qTarget(r1, 'sjtQuestions', 'sjt'); if (T) T.del(); persist(); return send(res, 200, { ok: true }); }
   }
 
   // ---- Job simulation (one per role) ----
   if (r0 === 'simulation') {
     db.simulations = db.simulations || {};
     const sim = (rk) => BANK.ROLES[rk] ? (db.simulations[rk] || BANK.roleQuestions(rk).simulation) : null;
-    if (r1 && m === 'GET') return send(res, 200, sim(r1) || null);
+    if (r1 && m === 'GET') { const T = qTarget(r1, 'simulations', 'simulation'); return send(res, 200, T && T.isPos ? T.get() : (sim(r1) || null)); }
     if (r1 && m === 'PUT') {
       if (needMaster()) return;
-      if (!BANK.ROLES[r1]) return send(res, 400, { error: 'Unknown role' });
+      const T = qTarget(r1, 'simulations', 'simulation');
+      if (!T) return send(res, 400, { error: 'Unknown role' });
       const b = await readBody(req);
       if (!b.title || !Array.isArray(b.items) || b.items.length < 3) return send(res, 400, { error: 'title and >=3 items required' });
       const items = b.items.slice(0, 10).map((it, k) => ({ id: it.id || String.fromCharCode(97 + k), t: String(it.t || '').slice(0, 300) }));
       const idealIds = Array.isArray(b.ideal) ? b.ideal.filter((x) => items.find((it) => it.id === x)) : items.map((it) => it.id);
-      db.simulations[r1] = { title: String(b.title).slice(0, 200), brief: String(b.brief || '').slice(0, 1000), items, ideal: idealIds, rationale: String(b.rationale || '').slice(0, 500) };
-      persist();
-      return send(res, 200, db.simulations[r1]);
+      const saved = { title: String(b.title).slice(0, 200), brief: String(b.brief || '').slice(0, 1000), items, ideal: idealIds, rationale: String(b.rationale || '').slice(0, 500) };
+      T.set(saved); persist();
+      return send(res, 200, saved);
     }
-    if (r1 && m === 'DELETE') { if (needMaster()) return; delete db.simulations[r1]; persist(); return send(res, 200, { ok: true }); }
+    if (r1 && m === 'DELETE') { if (needMaster()) return; const T = qTarget(r1, 'simulations', 'simulation'); if (T) T.del(); persist(); return send(res, 200, { ok: true }); }
   }
 
   // ---- Attention challenge (optional custom one per role; default = auto-generated Expiry Check) ----
@@ -1164,10 +1321,11 @@ async function api(req, res, url) {
   if (r0 === 'case-study') {
     db.caseStudies = db.caseStudies || {};
     const cs = (rk) => BANK.ROLES[rk] ? (db.caseStudies[rk] || BANK.roleQuestions(rk).caseStudy) : null;
-    if (r1 && m === 'GET') return send(res, 200, cs(r1) || null);
+    if (r1 && m === 'GET') { const T = qTarget(r1, 'caseStudies', 'caseStudy'); return send(res, 200, T && T.isPos ? T.get() : (cs(r1) || null)); }
     if (r1 && m === 'PUT') {
       if (needMaster()) return;
-      if (!BANK.ROLES[r1]) return send(res, 400, { error: 'Unknown role' });
+      const T = qTarget(r1, 'caseStudies', 'caseStudy');
+      if (!T) return send(res, 400, { error: 'Unknown role' });
       const b = await readBody(req);
       if (!b.title || !b.context || !Array.isArray(b.questions) || b.questions.length < 1) return send(res, 400, { error: 'title, context and >=1 question required' });
       const ex = b.exhibit || {};
@@ -1178,11 +1336,11 @@ async function api(req, res, url) {
         rubric: Array.isArray(q.rubric) ? q.rubric.map((r) => ({ point: String(r.point || ''), kw: Array.isArray(r.kw) ? r.kw.map((k) => String(k).toLowerCase()) : [] })) : [],
         comp: Array.isArray(q.comp) ? q.comp.filter((c) => typeof c === 'string') : ['problem']
       }));
-      db.caseStudies[r1] = { title: String(b.title).slice(0, 200), context: String(b.context).slice(0, 3000), exhibit, questions };
-      persist();
-      return send(res, 200, db.caseStudies[r1]);
+      const saved = { title: String(b.title).slice(0, 200), context: String(b.context).slice(0, 3000), exhibit, questions };
+      T.set(saved); persist();
+      return send(res, 200, saved);
     }
-    if (r1 && m === 'DELETE') { if (needMaster()) return; delete db.caseStudies[r1]; persist(); return send(res, 200, { ok: true }); }
+    if (r1 && m === 'DELETE') { if (needMaster()) return; const T = qTarget(r1, 'caseStudies', 'caseStudy'); if (T) T.del(); persist(); return send(res, 200, { ok: true }); }
   }
 
   // ---- Reasoning MCQs (shared across all roles) ----
@@ -1219,22 +1377,29 @@ async function api(req, res, url) {
     };
     if (!r1 && m === 'GET') {
       const rk = url.searchParams.get('role');
+      if (rk && rk.startsWith('pos:')) { const T = qTarget(rk, 'voiceQuestions', 'voice'); const v = T && T.get(); return send(res, 200, v && v.length ? (BANK.VOICE_COMMON || []).concat(v) : []); }
       if (rk) return send(res, 200, list(rk) || []);
       const out = {};
       Object.keys(BANK.ROLES).forEach((k) => { out[k] = list(k); });
       return send(res, 200, out);
     }
-    if (r1 && m === 'GET') return send(res, 200, list(r1) || []);
+    if (r1 && m === 'GET') {
+      const T = qTarget(r1, 'voiceQuestions', 'voice');
+      if (T && T.isPos) { const v = T.get(); return send(res, 200, v && v.length ? (BANK.VOICE_COMMON || []).concat(v) : []); }
+      return send(res, 200, list(r1) || []);
+    }
     if (r1 && m === 'PUT') {
       if (needMaster()) return;
-      if (!BANK.ROLES[r1]) return send(res, 400, { error: 'Unknown role' });
+      const T = qTarget(r1, 'voiceQuestions', 'voice');
+      if (!T) return send(res, 400, { error: 'Unknown role' });
       const b = await readBody(req);
       if (!Array.isArray(b.items)) return send(res, 400, { error: 'items array required' });
-      db.voiceQuestions[r1] = b.items.map((it) => ({ id: it.id || 'q-' + Math.random().toString(36).slice(2, 8), q: String(it.q || '').slice(0, 1000), checks: Array.isArray(it.checks) ? it.checks.map((c) => ({ label: String(c.label || ''), kw: Array.isArray(c.kw) ? c.kw.map(String) : [] })) : [] }));
-      persist();
-      return send(res, 200, db.voiceQuestions[r1]);
+      let saved = b.items.map((it) => ({ id: it.id || 'q-' + Math.random().toString(36).slice(2, 8), q: String(it.q || '').slice(0, 1000), checks: Array.isArray(it.checks) ? it.checks.map((c) => ({ label: String(c.label || ''), kw: Array.isArray(c.kw) ? c.kw.map(String) : [] })) : [] }));
+      if (T.isPos) { const common = new Set((BANK.VOICE_COMMON || []).map((c) => c.id)); saved = saved.filter((v) => !common.has(v.id)); }
+      T.set(saved); persist();
+      return send(res, 200, saved);
     }
-    if (r1 && m === 'DELETE') { if (needMaster()) return; delete db.voiceQuestions[r1]; persist(); return send(res, 200, { ok: true }); }
+    if (r1 && m === 'DELETE') { if (needMaster()) return; const T = qTarget(r1, 'voiceQuestions', 'voice'); if (T) T.del(); persist(); return send(res, 200, { ok: true }); }
   }
 
   // ---- walk-in schedule confirmation ----
@@ -1546,7 +1711,7 @@ async function api(req, res, url) {
   }
 
   if (r0 === 'submissions') {
-    if (!r1 && m === 'GET') { if (needAdmin()) return; const sc = scopeOf(admin); return send(res, 200, sc === null ? listSubs() : listSubs().filter((s) => sc.has(s.role))); }
+    if (!r1 && m === 'GET') { if (needAdmin()) return; const sc = scopeOf(admin); return send(res, 200, (sc === null ? listSubs() : listSubs().filter((s) => sc.has(s.role))).map((s) => forAdmin(s, admin))); }
     if (!r1 && m === 'POST') {
       const b = await readBody(req);
       if (!b.id || !b.candidate || !b.candidate.email || !BANK.ROLES[b.role]) return send(res, 400, { error: 'Invalid submission' });
@@ -1593,7 +1758,10 @@ async function api(req, res, url) {
         sub.resume = pick(b.resume, ['name', 'type', 'size', 'text']);
         try { sub.resume.file = saveResumeFile(id, b.resume); } catch (e) { console.warn('resume save failed', e.message); }
       }
-      sub.evaluation = EVAL.evaluate(sub, settings());
+      // Score against the exact questions this interview used (position's JD-based set when it has one); keep a copy so reports always match.
+      const qset = resolveQuestions(b.role, sub.position && sub.position.id);
+      sub.qset = qset;
+      sub.evaluation = EVAL.evaluate(sub, settings(), qset);
       db.submissions[id] = sub;
       if (b.invite) Object.assign(db.invites[b.invite], { status: 'Completed', completedAt: sub.completedAt });
       persist();
@@ -1649,7 +1817,56 @@ async function api(req, res, url) {
         return send(res, e.status || 500, { error: e.message });
       }
     }
-    if (m === 'GET') return send(res, 200, sub);
+    // ---- panel feedback after the 2nd-round interview (HOD of the department or master) ----
+    if (r2 === 'review' && m === 'POST') {
+      const b = await readBody(req);
+      if (!sub.round2 || !['slot-set', 'sent'].includes(sub.round2.status)) return send(res, 400, { error: 'Feedback opens once the 2nd-round interview is scheduled' });
+      const who = { key: reviewerKey(admin), name: admin.name || (admin.role === 'master' ? 'Admin' : 'HOD'), role: admin.role };
+      const rv = cleanReview(b, who);
+      if (rv.recommend !== 'hold' && rv.feedback.length < 10) return send(res, 400, { error: 'Please write a short feedback note (at least 10 characters)' });
+      sub.reviews = (sub.reviews || []).filter((x) => x.key !== rv.key).concat([rv]);
+      sub.round2.history = (sub.round2.history || []).concat([{ at: rv.at, event: 'Interview feedback: ' + ({ go: 'good to go', hold: 'on hold', no: 'not a fit' }[rv.recommend]), by: who.name }]).slice(-50);
+      persist(); return send(res, 200, forAdmin(sub, admin));
+    }
+    // ---- job offer: HOD/master approves "make offer"; only HR (master) sets the salary and sends ----
+    if (r2 === 'offer' && m === 'POST') {
+      const b = await readBody(req);
+      const now = new Date().toISOString();
+      const o = sub.offer = sub.offer || { status: 'none', history: [] };
+      const log = (event) => { o.history = (o.history || []).concat([{ at: now, event, by: admin.name || 'Admin' }]).slice(-30); };
+      const act = String(b.action || '');
+      if (act === 'approve') {
+        if (!(sub.reviews || []).some((x) => x.recommend === 'go')) return send(res, 400, { error: 'Add interview feedback with "Good to go" first' });
+        if (['ready', 'sent', 'accepted'].includes(o.status)) return send(res, 400, { error: 'Offer is already prepared' });
+        o.status = 'approved'; o.approvedBy = admin.name || 'Admin'; o.approvedAt = now; log('Offer approved'); persist(); return send(res, 200, forAdmin(sub, admin));
+      }
+      if (needMaster()) return;
+      if (act === 'prepare') {
+        if (!['approved', 'ready'].includes(o.status)) return send(res, 400, { error: 'Approve the offer first' });
+        const salary = Math.round(Number(b.salary));
+        if (!isFinite(salary) || salary < 1000 || salary > 100000000) return send(res, 400, { error: 'Enter a valid monthly salary (PKR)' });
+        o.salary = salary; o.currency = 'PKR';
+        o.joiningDate = /^\d{4}-\d{2}-\d{2}$/.test(b.joiningDate || '') ? b.joiningDate : '';
+        o.note = String(b.note || '').trim().slice(0, 500);
+        o.preparedBy = admin.name || 'Admin'; o.preparedAt = now; o.status = 'ready'; o.send = null; log('Salary set'); persist(); return send(res, 200, sub);
+      }
+      if (act === 'preview') { if (!o.salary) return send(res, 400, { error: 'Set the salary first' }); const e = buildOfferEmail(sub); return send(res, 200, { to: e.to, subject: e.subject, html: e.html, mailConfigured: !!(mailer.isConfigured() || (process.env.OFFER_SCRIPT_URL && process.env.OFFER_SCRIPT_KEY)) }); }
+      if (act === 'send') {
+        if (!['ready', 'sent'].includes(o.status) || !o.salary) return send(res, 400, { error: 'Set the salary first' });
+        try {
+          const out = await sendOfferEmail(sub);
+          o.send = { state: out.state, via: out.via, at: now, error: '' };
+          if (out.state === 'sent') { o.status = 'sent'; o.sentAt = now; sub.stage = 'Offer'; }
+          log(out.state === 'sent' ? 'Offer emailed' : 'Offer saved to Email outbox (mail not configured)');
+          persist(); return send(res, 200, sub);
+        } catch (e) { o.send = { state: 'failed', at: now, error: e.message.slice(0, 200) }; log('Offer email failed'); persist(); return send(res, e.status || 500, { error: e.message }); }
+      }
+      if (act === 'accepted') { if (o.status !== 'sent') return send(res, 400, { error: 'Send the offer first' }); o.status = 'accepted'; sub.stage = 'Hired'; log('Candidate accepted'); persist(); return send(res, 200, sub); }
+      if (act === 'declined') { if (o.status !== 'sent') return send(res, 400, { error: 'Send the offer first' }); o.status = 'declined'; sub.stage = 'Rejected'; log('Candidate declined'); persist(); return send(res, 200, sub); }
+      if (act === 'withdraw') { sub.offer = null; persist(); return send(res, 200, sub); }
+      return send(res, 400, { error: 'Unknown action' });
+    }
+    if (m === 'GET') return send(res, 200, forAdmin(sub, admin));
     if (m === 'PATCH') {
       const b = await readBody(req);
       Object.assign(sub, pick(b, ['stage', 'notes', 'rating', 'tags']));
