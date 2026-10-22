@@ -575,7 +575,7 @@ Output STRICT JSON only (no prose, no code fences) with exactly these keys:
   const score = parts.skills + parts.experience + parts.education + parts.domain;   // total is computed here, never trusted from the model
   let years = Number(j.years); years = isFinite(years) && years >= 0 && years <= 50 ? Math.round(years * 10) / 10 : null;
   const best = deptMode && positions.find((p) => String(p.title).toLowerCase() === String(j.bestPosition || '').trim().toLowerCase());
-  return { score, parts, summary: String(j.summary || '').slice(0, 400), matched: list(j.matched), gaps: list(j.gaps), years, bestPosition: best ? best.title : null, model };
+  return { score, parts, summary: String(j.summary || '').slice(0, 800), matched: list(j.matched), gaps: list(j.gaps), years, bestPosition: best ? best.title : null, model };
 }
 const baseUrl = (req) => `${req.headers['x-forwarded-proto'] || (req.socket.encrypted ? 'https' : 'http')}://${req.headers['x-forwarded-host'] || req.headers.host || 'localhost:' + PORT}`;
 // Creates (or reuses) the interview invite for a screened application and emails the link.
