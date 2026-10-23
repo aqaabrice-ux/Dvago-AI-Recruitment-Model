@@ -1926,8 +1926,10 @@ async function api(req, res, url) {
   }
   if (r0 === 'clear' && m === 'POST') {
     if (needMaster()) return;
-    db.invites = {}; db.submissions = {};
+    // Wipes every candidate record (applications, invitations, interviews, files) so the same email/phone can apply again. Positions, users, questions and settings stay.
+    db.invites = {}; db.submissions = {}; db.applications = {};
     fs.readdirSync(RESUMES).forEach((f) => { try { fs.unlinkSync(path.join(RESUMES, f)); } catch (e) {} });
+    [VIDEOS, VOICE_AUDIO].forEach((dir) => { try { fs.readdirSync(dir).forEach((f) => { try { fs.rmSync(path.join(dir, f), { recursive: true, force: true }); } catch (e) {} }); } catch (e) {} });
     persist();
     return send(res, 200, { ok: true });
   }
