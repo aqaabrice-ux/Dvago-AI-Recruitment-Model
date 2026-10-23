@@ -78,7 +78,9 @@ a { color: inherit; }
 .toast-info .ico { color: var(--gold); }
 
 /* Logo */
-.dvago-logo { width: auto; height: 100%; overflow: visible; }
+.dvago-logo { position: relative; display: inline-block; height: 100%; aspect-ratio: 1200 / 274; vertical-align: top; }
+.dvago-logo img { position: absolute; inset: 0; width: 100%; height: 100%; user-select: none; pointer-events: none; }
+.dvago-logo .lg-heart { transform-origin: 32.3% 49.7%; }
 
 /* Score ring (shared) */
 .ring { --size: 64px; --val: 0; --c: var(--g-500); width: var(--size); height: var(--size); border-radius: 50%; display: grid; place-items: center; position: relative;
