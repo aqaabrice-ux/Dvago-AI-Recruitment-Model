@@ -180,18 +180,16 @@ if (db.orgSplitV !== 1) {
   db.orgSplitV = 1; setTimeout(() => persist(), 0);
   console.log('[migrate] Org split: Commercial / Corporate Sales / Warehouse');
 }
-// Team hierarchy (from hierarchy.xlsx): seeded once from hierarchy-seed.json. After that the master edits it in the admin "Org structure" tab.
-if (!db.hierarchy) {
-  db.hierarchy = { v: 1, members: {} };
+// Company org tree (from the 2026 organogram PPT): seeded once from org-seed.json (v2 = real reporting lines: parentId, grade, location, flags).
+// After that the master edits it in the admin "Org structure" tab. An older flat list (v1) is kept in db.hierarchyV1 and replaced once.
+if (!db.hierarchy || db.hierarchy.v !== 2) {
+  if (db.hierarchy && db.hierarchy.members && Object.keys(db.hierarchy.members).length) db.hierarchyV1 = db.hierarchy;
+  db.hierarchy = { v: 2, members: {} };
   try {
-    const seed = JSON.parse(fs.readFileSync(path.join(__dirname, 'hierarchy-seed.json'), 'utf8'));
-    let n = 0;
-    Object.entries(seed.departments || {}).forEach(([deptId, list]) => list.forEach((p, i) => {
-      const id = 'h-' + crypto.randomBytes(5).toString('hex');
-      db.hierarchy.members[id] = { id, deptId, name: p.name, designation: p.designation, isHead: !!p.isHead, status: 'Active', order: n++ };
-    }));
-    console.log(`[seed] Hierarchy: ${n} people`);
-  } catch (e) { console.warn('[seed] hierarchy-seed.json not loaded:', e.message); }
+    const seed = JSON.parse(fs.readFileSync(path.join(__dirname, 'org-seed.json'), 'utf8'));
+    (seed.nodes || []).forEach((p) => { db.hierarchy.members[p.id] = Object.assign({ jd: '' }, p); });
+    console.log(`[seed] Org tree: ${Object.keys(db.hierarchy.members).length} nodes`);
+  } catch (e) { console.warn('[seed] org-seed.json not loaded:', e.message); }
   setTimeout(() => persist(), 0);
 }
 // Seed default positions on first run
@@ -1449,28 +1447,55 @@ async function api(req, res, url) {
     const hu = isM ? null : db.users[admin.userId];
     const mine = new Set(isM || (hu && hu.allDepartments) ? deptList().map((d) => d.id) : ((hu && hu.departmentIds) || []));
     const members = () => db.hierarchy.members;
-    const pubM = (x) => pick(x, ['id', 'deptId', 'name', 'designation', 'isHead', 'status', 'vacatedName', 'vacatedAt']);
+    const pubM = (x) => pick(x, ['id', 'parentId', 'deptId', 'kind', 'name', 'designation', 'grade', 'location', 'flag', 'note', 'jd', 'isHead', 'status', 'vacatedName', 'vacatedAt', 'order']);
+    // Subtree helper: id -> all descendants
+    const childrenOf = () => { const c = {}; Object.values(members()).forEach((x) => { (c[x.parentId || ''] = c[x.parentId || ''] || []).push(x); }); return c; };
+    const subtree = (ids, c) => { const out = new Set(), st = [...ids]; while (st.length) { const id = st.pop(); if (out.has(id)) continue; out.add(id); (c[id] || []).forEach((k) => st.push(k.id)); } return out; };
+    const tokens = (s) => String(s || '').toLowerCase().replace(/[^a-z\s]/g, ' ').split(/\s+/).filter((t) => t.length > 1);
     if (!r1 && m === 'GET') {
-      const departments = deptList().filter((d) => mine.has(d.id)).map((d) => ({
+      const all = Object.values(members());
+      let visible;
+      if (isM || (hu && hu.allDepartments)) visible = new Set(all.map((x) => x.id));
+      else {
+        // A HOD sees every node of their departments plus the whole branch under their own box in the chart (matched by name).
+        const c = childrenOf(), mt = tokens(hu && hu.name);
+        const own = mt.length ? all.filter((x) => x.kind === 'person' && x.name && mt.every((t) => tokens(x.name).includes(t))).map((x) => x.id) : [];
+        visible = subtree([...own, ...all.filter((x) => x.deptId && mine.has(x.deptId)).map((x) => x.id)], c);
+      }
+      const nodes = all.filter((x) => visible.has(x.id)).sort((a, b) => (a.order || 0) - (b.order || 0)).map(pubM);
+      const rootIds = nodes.filter((x) => !x.parentId || !visible.has(x.parentId)).map((x) => x.id);
+      const departments = deptList().filter((d) => isM || mine.has(d.id)).map((d) => ({
         id: d.id, name: d.name,
-        hods: Object.values(db.users).filter((x) => x.active !== false && (x.departmentIds || []).includes(d.id)).map((x) => x.name),
-        members: Object.values(members()).filter((x) => x.deptId === d.id).sort((a, b) => (a.order || 0) - (b.order || 0)).map(pubM)
+        hods: Object.values(db.users).filter((x) => x.active !== false && (x.departmentIds || []).includes(d.id)).map((x) => x.name)
       }));
-      return send(res, 200, { canEdit: isM, departments });
+      return send(res, 200, { canEdit: isM, departments, nodes, rootIds });
     }
     if (needMaster()) return;
     const str = (v, n) => String(v == null ? '' : v).replace(/\s+/g, ' ').trim().slice(0, n);
     const setHead = (x) => { Object.values(members()).forEach((y) => { if (y.deptId === x.deptId && y.id !== x.id) y.isHead = false; }); };
     const apply = (x, b) => {
-      if (b.deptId !== undefined) { if (!deptList().some((d) => d.id === b.deptId)) return 'Unknown department'; x.deptId = b.deptId; }
-      if (b.designation !== undefined) x.designation = str(b.designation, 90);
-      if (b.name !== undefined) x.name = str(b.name, 80);
+      if (b.kind !== undefined && ['person', 'unit', 'info'].includes(b.kind)) x.kind = b.kind;
+      if (b.deptId !== undefined) { if (b.deptId !== '' && !deptList().some((d) => d.id === b.deptId)) return 'Unknown department'; x.deptId = b.deptId; }
+      if (b.parentId !== undefined) {
+        const p = members()[b.parentId];
+        if (!p) return x.parentId === '' && b.parentId === '' ? null : 'Pick who this reports to';
+        if (x.id && subtree([x.id], childrenOf()).has(p.id)) return 'A person cannot report to someone in their own team';
+        x.parentId = p.id;
+      }
+      if (b.designation !== undefined) x.designation = str(b.designation, 120);
+      if (b.name !== undefined) x.name = str(b.name, 120);
+      if (b.grade !== undefined) x.grade = str(b.grade, 12);
+      if (b.location !== undefined) x.location = str(b.location, 40);
+      if (b.note !== undefined) x.note = str(b.note, 160);
+      if (b.flag !== undefined) x.flag = ['consultant', 'alert'].includes(b.flag) ? b.flag : '';
+      if (b.jd !== undefined) x.jd = String(b.jd || '').slice(0, 20000);
       if (b.status !== undefined) {
         const to = b.status === 'Vacant' ? 'Vacant' : 'Active';
         if (to === 'Vacant' && x.status !== 'Vacant') { if (x.name) { x.vacatedName = x.name; x.vacatedAt = new Date().toISOString(); } x.name = ''; }
         if (to === 'Active') { x.vacatedAt = null; }
         x.status = to;
       }
+      if (x.kind !== 'person') { x.status = 'Active'; if (!x.name) return 'A name is required'; return null; }
       if (b.isHead !== undefined) { x.isHead = !!b.isHead; if (x.isHead) setHead(x); }
       if (!x.designation) return 'Designation is required';
       if (x.status !== 'Vacant' && !x.name) return 'Name is required (or mark the position Vacant)';
@@ -1479,8 +1504,10 @@ async function api(req, res, url) {
     if (!r1 && m === 'POST') {
       const b = await readBody(req);
       const id = 'h-' + crypto.randomBytes(5).toString('hex');
-      const x = { id, deptId: '', name: '', designation: '', isHead: false, status: 'Active', order: Math.max(0, ...Object.values(members()).map((y) => y.order || 0)) + 1 };
-      const err = apply(x, { deptId: b.deptId, name: b.name, designation: b.designation, status: b.status, isHead: b.isHead });
+      const x = { id, parentId: '', deptId: '', kind: 'person', name: '', designation: '', grade: '', location: '', flag: '', note: '', jd: '', isHead: false, status: 'Active', order: Math.max(0, ...Object.values(members()).map((y) => y.order || 0)) + 1 };
+      if (!members()[b.parentId]) return send(res, 400, { error: 'Pick who this reports to' });
+      if (b.deptId === undefined) b.deptId = members()[b.parentId].deptId;
+      const err = apply(x, b);
       if (err) return send(res, 400, { error: err });
       members()[id] = x; persist(); return send(res, 201, pubM(x));
     }
@@ -1492,7 +1519,11 @@ async function api(req, res, url) {
       if (err) return send(res, 400, { error: err });
       persist(); return send(res, 200, pubM(x));
     }
-    if (m === 'DELETE') { delete members()[r1]; persist(); return send(res, 200, { ok: true }); }
+    if (m === 'DELETE') {
+      if (!x.parentId) return send(res, 400, { error: 'The top of the chart cannot be removed' });
+      Object.values(members()).forEach((y) => { if (y.parentId === x.id) y.parentId = x.parentId; });   // their team moves up one level
+      delete members()[r1]; persist(); return send(res, 200, { ok: true });
+    }
   }
 
   // ---- org structure (master edits, anyone signed in can read their own via /me) ----
