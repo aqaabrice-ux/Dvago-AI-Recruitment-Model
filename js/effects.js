@@ -75,25 +75,9 @@
   //   logo({variant:'white'})        → all white (for dark backgrounds)
   //   logo({color, heartColor, outline:false|'#color'}) → full custom
   function logo(opts = {}) {
-    const variant = opts.variant || 'default';
-    let c, g, outline;
-    if (variant === 'white') { c = '#FFFFFF'; g = '#FFFFFF'; outline = false; }
-    else { c = opts.color || '#78B943'; g = opts.heartColor || '#78B943'; outline = opts.outline === false ? false : (opts.outline || '#FFFFFF'); }
     const cls = opts.className || '';
-    const outlineLayer = outline ? `
-      <g transform="translate(88 6)" fill="none" stroke="${outline}" stroke-width="28" stroke-linecap="round" stroke-linejoin="round">
-        <path d="M52 100 L13 50 C-1 31 9 7 31 8 C45 9 52 22 52 36"/>
-        <path d="M52 100 L96 10"/>
-      </g>` : '';
-    return `<svg class="dvago-logo ${cls}" viewBox="0 0 400 118" role="img" aria-label="DVAGO" style="overflow:visible">
-      <text x="0" y="104" textLength="84" lengthAdjust="spacingAndGlyphs" fill="${c}" font-family="Poppins, 'Arial Black', sans-serif" font-weight="800" font-size="120">D</text>
-      ${outlineLayer}
-      <g transform="translate(88 6)" fill="none" stroke="${g}" stroke-width="17" stroke-linecap="round" stroke-linejoin="round">
-        <path class="lv-a" d="M52 100 L13 50 C-1 31 9 7 31 8 C45 9 52 22 52 36"/>
-        <path class="lv-b" d="M52 100 L96 10"/>
-      </g>
-      <text x="196" y="104" textLength="204" lengthAdjust="spacingAndGlyphs" fill="${c}" font-family="Poppins, 'Arial Black', sans-serif" font-weight="800" font-size="120">AGO</text>
-    </svg>`;
+    const style = opts.variant === 'white' ? ' style="filter:brightness(0) invert(1)"' : '';
+    return `<span class="dvago-logo ${cls}" role="img" aria-label="DVAGO"${style}><img class="lg-rest" src="assets/logo-rest.png" alt="" draggable="false"><img class="lg-heart" src="assets/logo-heart.png" alt="" draggable="false"></span>`;
   }
 
   const reduced = () => root.matchMedia && root.matchMedia('(prefers-reduced-motion: reduce)').matches;
