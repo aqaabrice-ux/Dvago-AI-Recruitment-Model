@@ -129,6 +129,7 @@ window.DVAGO_DEMO = (function () {
 
     const sub = {
       id: 'DVG-' + (1000000 + i).toString(36).toUpperCase(),
+      demo: true,   // sample record: can be removed again with "Remove demo data"
       sessionId: 'S' + i,
       invite: null,
       createdAt: dt.toISOString(),
@@ -162,7 +163,7 @@ window.DVAGO_DEMO = (function () {
 
   async function seed() {
     const existing = await Store.listSubmissions();
-    if (existing.length > 0) return { skipped: existing.length };
+    if (existing.some((s) => s.demo)) return { skipped: existing.length };   // demo already loaded (real candidates may exist: they are left alone)
     const samples = [];
     for (let i = 0; i < 24; i++) samples.push(makeOne(i));
     // Save via import (works for both local and server mode)
@@ -170,5 +171,13 @@ window.DVAGO_DEMO = (function () {
     return { created: samples.length };
   }
 
-  return { seed, makeOne };
+  // Deletes only the sample candidates added by seed(); real candidates are never touched.
+  async function unseed() {
+    const all = await Store.listSubmissions();
+    const demo = all.filter((s) => s.demo);
+    for (const s of demo) { await Store.deleteSubmission(s.id); }
+    return { removed: demo.length };
+  }
+
+  return { seed, unseed, makeOne };
 })();
