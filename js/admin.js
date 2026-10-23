@@ -1367,158 +1367,184 @@
     $$('[data-copy]').forEach((b) => b.addEventListener('click', () => { navigator.clipboard.writeText(b.dataset.copy); UI.toast('Link copied', 'success'); }));
     $$('[data-del]').forEach((b) => b.addEventListener('click', async () => { await Store.deleteInvite(b.dataset.del); UI.toast('Invitation removed', 'success'); render(); }));
   }
-  // ---------- Team hierarchy ----------
-  // HODs see the structure of their own departments (read-only). The master sees everything and can edit: add / edit / remove people and mark a position Vacant.
+  // ---------- Org structure (company tree) ----------
+  // Top-down chart like the company organogram: CEO > heads > teams. The master sees everything and edits; a HOD sees their own branch.
   let hierData = null;
-  function hierRank(d) {
-    const t = String(d || '').toLowerCase();
-    if (/^head\b|head of/.test(t)) return 0;
-    if (/senior manager/.test(t)) return 1;
-    if (/associate manager/.test(t)) return 3;
-    if (/deputy manager/.test(t)) return 4;
-    if (/assistant manager/.test(t)) return 5;
-    if (/manager/.test(t)) return 2;
-    if (/senior executive/.test(t)) return 6;
-    if (/executive/.test(t)) return 7;
-    if (/officer/.test(t)) return 8;
-    if (/intern|trainee/.test(t)) return 11;
-    if (/rider|driver|cleaner|loader|porter|gate ?keeper|office boy/.test(t)) return 10;
-    return 9;
-  }
   async function renderHierarchy(refetch) {
-    if (!hierData || refetch !== false) { try { hierData = await Store.getHierarchy(); } catch (e) { view.innerHTML = `<div class="empty"><h3>Could not load the hierarchy</h3><p>${esc(e.message || '')}</p></div>`; return; } }
+    if (!hierData || refetch !== false) { try { hierData = await Store.getHierarchy(); } catch (e) { view.innerHTML = `<div class="empty"><h3>Could not load the org structure</h3><p>${esc(e.message || '')}</p></div>`; return; } }
     const H = hierData, M = !!H.canEdit;
-    const f = state.hier = state.hier || { q: '', status: '' };
+    const f = state.hier = state.hier || {};
+    if (f.q == null) f.q = ''; if (f.status == null) f.status = ''; if (!f.open) f.open = {};
+    const nodes = H.nodes || [];
+    const byId = {}, kids = {};
+    nodes.forEach((x) => { byId[x.id] = x; });
+    nodes.forEach((x) => { const p = byId[x.parentId] ? x.parentId : ''; (kids[p] = kids[p] || []).push(x); });
+    const kidsOf = (id) => kids[id] || [];
+    const people = nodes.filter((x) => x.kind === 'person');
+    const nVac = people.filter((x) => x.status === 'Vacant').length, nAct = people.length - nVac;
+    const descIds = (id) => { const out = new Set(), st = [id]; while (st.length) { const c = st.pop(); if (out.has(c)) continue; out.add(c); kidsOf(c).forEach((k) => st.push(k.id)); } return out; };
+    const countPeople = (id) => [...descIds(id)].filter((i) => i !== id && byId[i].kind === 'person').length;
+
+    // ---- which boxes are the top of the chart ----
+    let roots;
+    if (f.focus && byId[f.focus]) roots = [byId[f.focus]];
+    else if (state.dept) roots = nodes.filter((x) => x.deptId === state.dept && !(byId[x.parentId] && byId[x.parentId].deptId === state.dept));
+    else roots = (H.rootIds || []).map((id) => byId[id]).filter(Boolean);
+
+    // ---- search / status filter: keep matches and the path above them ----
     const q = f.q.trim().toLowerCase();
-    const depts = H.departments.filter((d) => !state.dept || d.id === state.dept);
-    const all = depts.flatMap((d) => d.members);
-    const nAct = all.filter((x) => x.status !== 'Vacant').length, nVac = all.length - nAct;
-    const match = (x) => (!f.status || (f.status === 'Vacant') === (x.status === 'Vacant')) && (!q || (x.name + ' ' + x.designation + ' ' + (x.vacatedName || '')).toLowerCase().includes(q));
-    const card = (x, head) => {
+    const searching = !!(q || f.status);
+    let keep = null, hits = 0;
+    if (searching) {
+      keep = new Set();
+      nodes.forEach((x) => {
+        if (x.kind === 'info') return;
+        const text = (x.name + ' ' + x.designation + ' ' + (x.vacatedName || '') + ' ' + (x.location || '') + ' ' + (x.note || '')).toLowerCase();
+        const stOk = !f.status || (x.kind === 'person' && (f.status === 'Vacant') === (x.status === 'Vacant'));
+        if (stOk && (!q || text.includes(q))) { hits++; let c = x; while (c && !keep.has(c.id)) { keep.add(c.id); c = byId[c.parentId]; } }
+      });
+    }
+    const isOpen = (id, depth) => (searching ? true : (id in f.open ? f.open[id] : depth === 0));
+
+    // ---- boxes ----
+    const card = (x, depth, mini) => {
+      if (x.kind === 'info') return `<div class="oc info">${esc(x.name)}</div>`;
+      if (x.kind === 'unit') return `<button type="button" class="oc unit" data-hp="${esc(x.id)}"><span class="oc-m"><b>${esc(x.name)}</b>${x.note ? `<small>${esc(x.note)}</small>` : ''}</span></button>`;
       const vac = x.status === 'Vacant';
-      return `<div class="h-card ${vac ? 'vac' : ''} ${head ? 'head' : ''}">
-        <div class="av" style="background:${vac ? 'var(--line-2)' : avColor(x.name)}">${vac ? '?' : initials(x.name)}</div>
-        <div class="h-meta"><b>${vac ? 'Vacant position' : esc(x.name)}</b><span>${esc(x.designation)}</span>${vac && x.vacatedName ? `<small>Previously: ${esc(x.vacatedName)}</small>` : ''}</div>
-        <span class="badge ${vac ? 'b-bad' : 'b-good'}">${vac ? 'Vacant' : 'Active'}</span>
-        ${M ? `<div class="h-act"><button class="btn btn-outline btn-sm" data-hedit="${esc(x.id)}">Edit</button><button class="btn btn-outline btn-sm" data-hvac="${esc(x.id)}">${vac ? 'Fill' : 'Vacate'}</button><button class="btn btn-outline btn-sm" data-hdel="${esc(x.id)}" aria-label="Remove">${I('trash', 13)}</button></div>` : ''}
+      const sub = [x.grade, x.location, x.note].filter(Boolean).join(' · ');
+      return `<div class="oc ${mini ? 'mini' : ''} ${vac ? 'vac' : ''} ${x.flag || ''} ${x.isHead ? 'head' : ''} ${!x.parentId ? 'root' : ''}" data-hp="${esc(x.id)}" role="button" tabindex="0" title="${esc((vac ? 'Vacant' : x.name) + ' · ' + x.designation)}">
+        <i class="av" style="background:${vac ? '#b9a800' : avColor(x.name)}">${vac ? '?' : initials(x.name)}</i>
+        <span class="oc-m"><b>${vac ? 'Vacant position' : esc(x.name)}</b><span>${esc(x.designation)}</span>${sub ? `<small>${esc(sub)}</small>` : ''}</span>
+        <button type="button" class="jdb" data-jd="${esc(x.id)}" title="View job description">JD</button>
       </div>`;
     };
-    const block = (d) => {
-      const list = d.members.filter(match);
-      const head = list.filter((x) => x.isHead);
-      const groups = {};
-      list.filter((x) => !x.isHead).forEach((x) => { (groups[x.designation] = groups[x.designation] || []).push(x); });
-      const keys = Object.keys(groups).sort((a, b) => hierRank(a) - hierRank(b) || a.localeCompare(b));
-      const act = d.members.filter((x) => x.status !== 'Vacant').length;
-      return `<div class="panel h-dept"><div class="panel-head"><div><h3>${esc(d.name)}</h3><div class="sub">HOD: ${d.hods.length ? d.hods.map(esc).join(', ') : '<i>no HOD account yet</i>'} · ${d.members.length} positions · ${act} active · ${d.members.length - act} vacant</div></div>${M ? `<button class="btn btn-primary btn-sm" data-hadd="${esc(d.id)}">${I('plus', 14)} Add</button>` : ''}</div>
-        <div class="panel-body">
-          ${head.length ? `<div class="h-head">${head.map((x) => card(x, true)).join('')}</div>` : ''}
-          ${keys.map((k) => `<div class="h-group"><div class="h-gt">${esc(k)} <span>${groups[k].length}</span></div><div class="h-grid">${groups[k].map((x) => card(x, false)).join('')}</div></div>`).join('')}
-          ${!list.length ? `<p class="muted" style="margin:8px 0">${d.members.length ? 'No one matches this filter.' : 'No team members yet.' + (M ? ' Use Add to create the first one.' : '')}</p>` : ''}
-        </div></div>`;
-    };
-    // ---- tree view: company -> departments -> head + designation branches -> people. Big branches start collapsed so nothing gets crowded. ----
-    const searching = !!(q || f.status);
-    const isOpen = (key, dflt) => (searching ? true : (f.open && key in f.open ? f.open[key] : dflt));
-    const caret = (open) => `<span class="ot-caret ${open ? 'open' : ''}">${I('right', 13)}</span>`;
-    const chip = (x, showDes) => {
-      const vac = x.status === 'Vacant';
-      return `<button type="button" class="ot-p ${vac ? 'vac' : ''} ${x.isHead ? 'head' : ''}" data-hp="${esc(x.id)}" title="${esc((vac ? 'Vacant' : x.name) + ' · ' + x.designation)}"><i class="av" style="background:${vac ? 'var(--line-2)' : avColor(x.name)}">${vac ? '?' : initials(x.name)}</i><span><b>${vac ? 'Vacant' : esc(x.name)}</b>${showDes || vac ? `<small>${esc(vac && x.vacatedName ? 'was ' + x.vacatedName : x.designation)}</small>` : ''}</span></button>`;
-    };
-    const li = (inner, kids) => `<li>${inner}${kids ? `<ul>${kids}</ul>` : ''}</li>`;
-    const deptNode = (d) => {
-      const list = d.members.filter(match);
-      if ((q || f.status) && !list.length) return '';
-      const open = isOpen(d.id, true);
-      const heads = list.filter((x) => x.isHead);
-      const groups = {}; list.filter((x) => !x.isHead).forEach((x) => { (groups[x.designation] = groups[x.designation] || []).push(x); });
-      const keys = Object.keys(groups).sort((a, b) => hierRank(a) - hierRank(b) || a.localeCompare(b));
-      const act = d.members.filter((x) => x.status !== 'Vacant').length, vac = d.members.length - act;
-      let kids = '';
+    const node = (x, depth) => {
+      const ks = kidsOf(x.id).filter((k) => !keep || keep.has(k.id));
+      const open = ks.length > 0 && isOpen(x.id, depth);
+      let sub = '';
       if (open) {
-        kids += heads.map((x) => li(`<div class="ot-n head">${chip(x, true)}</div>`)).join('');
-        kids += keys.map((k) => {
-          const g = groups[k], gk = d.id + '|' + k, gopen = isOpen(gk, g.length <= 6);
-          return li(`<div class="ot-n grp ${gopen ? 'is-open' : ''}"><button type="button" class="ot-g" data-tg="${esc(gk)}" data-dflt="${g.length <= 6 ? 1 : 0}">${caret(gopen)}<b>${esc(k)}</b><em>${g.length}</em></button></div>`,
-            gopen ? li(`<div class="ot-people">${g.map((x) => chip(x, false)).join('')}</div>`) : '');
-        }).join('');
-        if (!list.length) kids = li(`<div class="ot-n empty-n">No team members yet${M ? '' : ''}</div>`);
+        const leaves = ks.filter((k) => k.kind !== 'unit' && !kidsOf(k.id).length);
+        const stack = leaves.length >= 3;   // many single people under one box: list them in one column instead of a very wide row
+        sub = ks.filter((k) => !(stack && leaves.includes(k))).map((k) => node(k, depth + 1)).join('') + (stack ? `<li><div class="ot-stack">${leaves.map((k) => card(k, depth + 1, true)).join('')}</div></li>` : '');
       }
-      return li(`<div class="ot-n dept ${open ? 'is-open' : ''}"><button type="button" class="ot-g" data-tg="${esc(d.id)}" data-dflt="1">${caret(open)}<b>${esc(d.name)}</b></button>
-          <div class="ot-sub">${d.hods.length ? 'HOD: ' + d.hods.map(esc).join(', ') : '<i>no HOD account yet</i>'}</div>
-          <div class="ot-stats"><span class="badge b-good">${act} active</span>${vac ? `<span class="badge b-bad">${vac} vacant</span>` : ''}${M ? `<button type="button" class="btn btn-outline btn-sm" data-hadd="${esc(d.id)}">${I('plus', 13)} Add</button>` : ''}</div></div>`, kids);
+      const tot = countPeople(x.id);
+      return `<li>${card(x, depth)}${x.note && x.kind === 'unit' ? '' : ''}${ks.length ? `<button type="button" class="oc-t ${open ? 'open' : ''}" data-tg="${esc(x.id)}" data-depth="${depth}" title="${kidsOf(x.id).length} direct · ${tot} people in this branch">${open ? '▴' : '▾'} ${kidsOf(x.id).length}${tot > kidsOf(x.id).length ? ` <span style="opacity:.7">(${tot})</span>` : ''}</button>` : ''}${sub ? `<ul>${sub}</ul>` : ''}</li>`;
     };
-    const deptTrees = depts.map(deptNode).join('');
-    const multi = depts.length > 1;
-    const rootOpen = isOpen('root', true);
-    const tree = !depts.length ? '' : (multi
-      ? `<ul class="ot-root">${li(`<div class="ot-n root ${rootOpen ? 'is-open' : ''}"><button type="button" class="ot-g" data-tg="root" data-dflt="1">${caret(rootOpen)}<b>DVAGO</b></button><div class="ot-sub">${depts.length} departments</div><div class="ot-stats"><span class="badge b-good">${nAct} active</span>${nVac ? `<span class="badge b-bad">${nVac} vacant</span>` : ''}</div></div>`, rootOpen ? deptTrees : '')}</ul>`
-      : `<ul class="ot-root">${deptTrees}</ul>`);
-    const mode = f.mode || 'tree';
-    view.innerHTML = `<div class="page-head"><div><h1>Org structure</h1><p>${M ? 'Structure of every department. Click a person to edit.' : 'Your team, by branch.'} · ${all.length} positions · ${nAct} active · ${nVac} vacant</p></div>
-        <div class="actions"><div class="seg">${[['tree', 'Tree'], ['list', 'List']].map(([k, l]) => `<button class="btn btn-sm ${mode === k ? 'btn-primary' : 'btn-outline'}" data-hm="${k}">${l}</button>`).join('')}</div></div></div>
-      <div class="h-tools"><input class="inp" id="hQ" placeholder="Search name or designation" value="${esc(f.q)}" style="max-width:300px">
+    const chain = (id) => { const out = []; let c = byId[id]; while (c) { out.unshift(c); c = byId[c.parentId]; } return out; };
+    const crumb = f.focus && byId[f.focus] ? `<div class="o-crumb"><button type="button" data-focus="">All</button>${chain(f.focus).map((c) => `<span>›</span><button type="button" data-focus="${esc(c.id)}">${esc(c.name || c.designation)}</button>`).join('')}</div>` : '';
+    const chartRoots = roots.filter((r) => !keep || keep.has(r.id));
+    const chart = chartRoots.length ? `<div class="otree"><ul class="ot">${chartRoots.map((r) => node(r, 0)).join('')}</ul></div>` : `<div class="empty"><h3>${searching ? 'No one matches this search' : 'Nothing to show'}</h3><p>${searching ? 'Try a different name or clear the filter.' : (M ? 'Pick a department or add people.' : 'No team is assigned to your account yet.')}</p></div>`;
+    const sc = $('.otree');
+    const keepScroll = sc ? { x: sc.scrollLeft, y: sc.scrollTop } : null;
+    view.innerHTML = `<div class="page-head"><div><h1>Org structure</h1><p>${M ? 'Company chart as per the organogram. Click a box for details; ▾ opens a team.' : 'Your team, by branch. ▾ opens a team.'} · ${people.length} positions · ${nAct} active · ${nVac} vacant</p></div>
+        <div class="actions"><button class="btn btn-outline btn-sm" id="hExp">Expand all</button><button class="btn btn-outline btn-sm" id="hCol">Collapse all</button>${M ? `<button class="btn btn-primary btn-sm" id="hNew">${I('plus', 14)} Add person</button>` : ''}</div></div>
+      <div class="h-tools"><input class="inp" id="hQ" placeholder="Search name, designation or city" value="${esc(f.q)}" style="max-width:300px">
         ${[['', 'All'], ['Active', 'Active'], ['Vacant', 'Vacant']].map(([k, l]) => `<button class="btn btn-sm ${f.status === k ? 'btn-primary' : 'btn-outline'}" data-hs="${k}">${l}</button>`).join('')}
-        ${mode === 'tree' ? `<span style="margin-left:auto;display:flex;gap:8px"><button class="btn btn-sm btn-outline" id="hExp">Expand all</button><button class="btn btn-sm btn-outline" id="hCol">Collapse all</button></span>` : ''}</div>
-      ${!depts.length ? `<div class="empty"><h3>No hierarchy to show</h3><p>${M ? 'Pick a department or add people.' : 'No department is assigned to your account yet.'}</p></div>`
-        : mode === 'tree' ? (deptTrees ? `<div class="otree">${tree}</div>` : `<div class="empty"><h3>No one matches this filter</h3></div>`) : depts.map(block).join('')}`;
+        ${searching ? `<span class="muted" style="font-size:13px">${hits} match${hits === 1 ? '' : 'es'}</span>` : ''}</div>
+      <div class="o-legend"><span><i style="background:#fff8b8"></i>Vacant</span><span><i style="background:#d6efff"></i>Consultant</span><span><i style="background:#ffe1df"></i>Marked red in the organogram</span><span><i style="background:var(--brand-pale)"></i>Head of department</span></div>
+      ${crumb}${chart}`;
+    const sc2 = $('.otree'); if (sc2 && keepScroll) { sc2.scrollLeft = keepScroll.x; sc2.scrollTop = keepScroll.y; }
+
     const qEl = $('#hQ');
     if (qEl) qEl.addEventListener('input', () => { f.q = qEl.value; const p = qEl.selectionStart; renderHierarchy(false).then(() => { const e = $('#hQ'); if (e) { e.focus(); try { e.setSelectionRange(p, p); } catch (_) {} } }); });
     $$('[data-hs]').forEach((b) => b.addEventListener('click', () => { f.status = b.dataset.hs; renderHierarchy(false); }));
-    $$('[data-hm]').forEach((b) => b.addEventListener('click', () => { f.mode = b.dataset.hm; renderHierarchy(false); }));
-    $$('[data-tg]').forEach((b) => b.addEventListener('click', () => { f.open = f.open || {}; const k = b.dataset.tg; f.open[k] = !isOpen(k, b.dataset.dflt === '1'); renderHierarchy(false); }));
-    const setAll = (open) => { f.open = { root: true }; H.departments.forEach((d) => { f.open[d.id] = true; new Set(d.members.map((x) => x.designation)).forEach((k) => { f.open[d.id + '|' + k] = open; }); }); renderHierarchy(false); };
-    const ex = $('#hExp'), co = $('#hCol'); if (ex) ex.addEventListener('click', () => setAll(true)); if (co) co.addEventListener('click', () => setAll(false));
-    if (!M) return;
-    const find = (id) => all.find((x) => x.id === id);
+    $$('[data-focus]').forEach((b) => b.addEventListener('click', () => { f.focus = b.dataset.focus || null; renderHierarchy(false); }));
+    $$('[data-tg]').forEach((b) => b.addEventListener('click', (e) => { e.stopPropagation(); const id = b.dataset.tg; f.open[id] = !isOpen(id, +b.dataset.depth); renderHierarchy(false); }));
+    $('#hExp').addEventListener('click', () => { roots.forEach((r) => descIds(r.id).forEach((i) => { f.open[i] = true; })); renderHierarchy(false); });
+    $('#hCol').addEventListener('click', () => { f.open = {}; renderHierarchy(false); });
+
+    // ---- job description (placeholder until the JDs are provided) ----
+    const openJd = (x) => {
+      const has = !!(x.jd && x.jd.trim());
+      modal(`<div class="m-head"><div class="m-ico brand">${I('file', 20)}</div><div><h3>Job description</h3><p>${esc(x.status === 'Vacant' ? 'Vacant position' : x.name)} · ${esc(x.designation)}</p></div></div>
+        <div class="m-body">${has ? `<div class="jd-text">${esc(x.jd)}</div>` : `<div class="jd-ph"><b>Job description coming soon</b>The JD for this position has not been added yet.</div>`}
+          ${M ? `<label class="fld" style="margin-top:14px"><span>${has ? 'Edit' : 'Add'} job description (optional)</span><textarea class="inp" id="jdText" rows="7" placeholder="Paste the JD here">${esc(x.jd || '')}</textarea></label>` : ''}</div>
+        <div class="m-foot"><button class="btn btn-outline" data-dismiss>Close</button>${M ? `<button class="btn btn-primary" id="jdSave">${I('check', 15)} Save</button>` : ''}</div>`);
+      const sv = $('#jdSave');
+      if (sv) sv.addEventListener('click', async () => { try { await Store.updateMember(x.id, { jd: $('#jdText').value }); UI.toast('Job description saved', 'success'); closeModal(); await renderHierarchy(true); } catch (e) { UI.toast(e.message || 'Failed', 'error'); } });
+      attachModalCloses();
+    };
+    $$('[data-jd]').forEach((b) => b.addEventListener('click', (e) => { e.stopPropagation(); const x = byId[b.dataset.jd]; if (x) openJd(x); }));
+
+    // ---- person sheet ----
     const refresh = async (msg) => { if (msg) UI.toast(msg, 'success'); closeModal(); await renderHierarchy(true); };
     const doVac = async (x) => {
-      if (x.status === 'Vacant') return openMemberModal(x, null, H, refresh, true);
+      if (x.status === 'Vacant') return openMemberModal(x, null, true);
       try { await Store.updateMember(x.id, { status: 'Vacant' }); await refresh(x.name + ' marked vacant'); } catch (e) { UI.toast(e.message, 'error'); }
     };
     const doDel = (x) => {
-      modal(`<div class="m-head"><div class="m-ico bad">${I('alert', 20)}</div><div><h3>Remove this position?</h3><p>${esc(x.name || 'Vacant position')} · ${esc(x.designation)}. To keep the position but empty it, use Vacate instead.</p></div></div><div class="m-foot"><button class="btn btn-outline" data-dismiss>Cancel</button><button class="btn btn-danger" id="hDelOk">Remove</button></div>`);
-      $('#hDelOk').addEventListener('click', async () => { try { await Store.deleteMember(x.id); await refresh('Removed'); } catch (e) { UI.toast(e.message, 'error'); } });
+      modal(`<div class="m-head"><div class="m-ico bad">${I('alert', 20)}</div><div><h3>Remove this box?</h3><p>${esc(x.name || 'Vacant position')}${x.designation ? ' · ' + esc(x.designation) : ''}. ${kidsOf(x.id).length ? 'Their team will move up to ' + esc((byId[x.parentId] || {}).name || 'the level above') + '. ' : ''}To keep the position but empty it, use Mark vacant instead.</p></div></div><div class="m-foot"><button class="btn btn-outline" data-dismiss>Cancel</button><button class="btn btn-danger" id="hDelOk">Remove</button></div>`);
+      $('#hDelOk').addEventListener('click', async () => { try { await Store.deleteMember(x.id); if (f.focus === x.id) f.focus = x.parentId || null; await refresh('Removed'); } catch (e) { UI.toast(e.message, 'error'); } });
       attachModalCloses();
     };
-    $$('[data-hadd]').forEach((b) => b.addEventListener('click', () => openMemberModal(null, b.dataset.hadd, H, refresh)));
-    $$('[data-hedit]').forEach((b) => b.addEventListener('click', () => openMemberModal(find(b.dataset.hedit), null, H, refresh)));
-    $$('[data-hvac]').forEach((b) => b.addEventListener('click', () => { const x = find(b.dataset.hvac); if (x) doVac(x); }));
-    $$('[data-hdel]').forEach((b) => b.addEventListener('click', () => { const x = find(b.dataset.hdel); if (x) doDel(x); }));
-    // Tree: click a person -> small action sheet
-    $$('[data-hp]').forEach((b) => b.addEventListener('click', () => {
-      const x = find(b.dataset.hp); if (!x) return; const vac = x.status === 'Vacant';
-      modal(`<div class="m-head"><div class="m-ico brand">${I('people', 20)}</div><div><h3>${vac ? 'Vacant position' : esc(x.name)}</h3><p>${esc(x.designation)}${x.isHead ? ' · Head of department' : ''}${vac && x.vacatedName ? ' · previously ' + esc(x.vacatedName) : ''}</p></div></div>
-        <div class="m-foot" style="flex-wrap:wrap;gap:8px"><button class="btn btn-outline" data-dismiss>Close</button><button class="btn btn-outline" id="paDel">${I('trash', 14)} Remove</button><button class="btn btn-outline" id="paVac">${vac ? 'Fill position' : 'Mark vacant'}</button><button class="btn btn-primary" id="paEdit">${I('eye', 14)} Edit</button></div>`);
-      $('#paEdit').addEventListener('click', () => { closeModal(); openMemberModal(x, null, H, refresh); });
-      $('#paVac').addEventListener('click', () => { closeModal(); doVac(x); });
-      $('#paDel').addEventListener('click', () => { closeModal(); doDel(x); });
+    const openSheet = (x) => {
+      if (x.kind === 'info') return;
+      const vac = x.status === 'Vacant', unit = x.kind === 'unit', mgr = byId[x.parentId], dep = H.departments.find((d) => d.id === x.deptId);
+      const row = (l, v) => (v ? `<div style="color:var(--muted)">${l}</div><div>${v}</div>` : '');
+      const direct = kidsOf(x.id).length, tot = countPeople(x.id);
+      modal(`<div class="m-head"><div class="m-ico brand">${I('people', 20)}</div><div><h3>${vac ? 'Vacant position' : esc(x.name)}</h3><p>${esc(unit ? 'Team' : x.designation)}${x.isHead ? ' · Head of department' : ''}${vac && x.vacatedName ? ' · previously ' + esc(x.vacatedName) : ''}</p></div></div>
+        <div class="m-body"><div style="display:grid;grid-template-columns:110px 1fr;gap:8px 12px;font-size:13.5px">
+          ${row('Grade', esc(x.grade))}${row('Location', esc(x.location))}${row('Department', esc(dep ? dep.name : ''))}${row('Reports to', mgr ? esc((mgr.name || 'Vacant') + (mgr.designation ? ' · ' + mgr.designation : '')) : '')}
+          ${row('Team', direct ? `${direct} direct${tot > direct ? ' · ' + tot + ' people in this branch' : ''}` : '')}${row('Note', esc(x.note))}${row('Status', vac ? 'Vacant' : x.flag === 'consultant' ? 'Consultant' : x.flag === 'alert' ? 'Marked red in the organogram' : 'Active')}
+        </div></div>
+        <div class="m-foot" style="flex-wrap:wrap;gap:8px"><button class="btn btn-outline" data-dismiss>Close</button>
+          ${!unit ? `<button class="btn btn-outline" id="paJd">${I('file', 14)} View JD</button>` : ''}
+          ${direct ? `<button class="btn btn-outline" id="paFocus">${I('eye', 14)} Open this branch</button>` : ''}
+          ${M ? `<button class="btn btn-outline" id="paAdd">${I('plus', 14)} Add report</button>${!unit ? `<button class="btn btn-outline" id="paVac">${vac ? 'Fill position' : 'Mark vacant'}</button>` : ''}<button class="btn btn-outline" id="paDel">${I('trash', 14)} Remove</button><button class="btn btn-primary" id="paEdit">Edit</button>` : ''}</div>`);
+      const on = (id, fn) => { const b = $('#' + id); if (b) b.addEventListener('click', fn); };
+      on('paJd', () => { closeModal(); openJd(x); });
+      on('paFocus', () => { closeModal(); f.focus = x.id; renderHierarchy(false); });
+      on('paAdd', () => { closeModal(); openMemberModal(null, x.id); });
+      on('paVac', () => { closeModal(); doVac(x); });
+      on('paDel', () => { closeModal(); doDel(x); });
+      on('paEdit', () => { closeModal(); openMemberModal(x, null); });
       attachModalCloses();
-    }));
-  }
-  function openMemberModal(x, deptId, H, refresh, fillOnly) {
-    const isNew = !x;
-    const desigs = [...new Set(H.departments.flatMap((d) => d.members.map((m) => m.designation)))].sort();
-    modal(`<div class="m-head"><div class="m-ico brand">${I('people', 20)}</div><div><h3>${fillOnly ? 'Fill vacant position' : isNew ? 'Add team member' : 'Edit team member'}</h3><p>${fillOnly ? esc(x.designation) : 'Changes are visible to the department HOD straight away'}</p></div></div>
-      <div class="m-body">
-        <label class="fld"><span>Name</span><input class="inp" id="hmName" value="${esc(x && x.status !== 'Vacant' ? x.name : '')}" placeholder="Full name"></label>
-        ${fillOnly ? '' : `<label class="fld"><span>Designation</span><input class="inp" id="hmDes" list="hmDesList" value="${esc(x ? x.designation : '')}" placeholder="e.g. Assistant Manager"><datalist id="hmDesList">${desigs.map((d) => `<option value="${esc(d)}">`).join('')}</datalist></label>
-        <label class="fld"><span>Department</span><select class="inp" id="hmDept">${H.departments.map((d) => `<option value="${esc(d.id)}" ${(x ? x.deptId : deptId) === d.id ? 'selected' : ''}>${esc(d.name)}</option>`).join('')}</select></label>
-        <label class="fld"><span>Status</span><select class="inp" id="hmStatus"><option value="Active" ${!x || x.status !== 'Vacant' ? 'selected' : ''}>Active</option><option value="Vacant" ${x && x.status === 'Vacant' ? 'selected' : ''}>Vacant (position open, no name)</option></select></label>
-        <label class="fld" style="flex-direction:row;gap:8px;align-items:center"><input type="checkbox" id="hmHead" ${x && x.isHead ? 'checked' : ''}> <span>Head of this department</span></label>`}
-      </div>
-      <div class="m-foot"><button class="btn btn-outline" data-dismiss>Cancel</button><button class="btn btn-primary" id="hmSave">${I('check', 15)} Save</button></div>`);
-    $('#hmSave').addEventListener('click', async () => {
-      const name = $('#hmName').value.trim();
-      try {
-        if (fillOnly) { if (!name) return UI.toast('Please enter the name', 'error'); await Store.updateMember(x.id, { name, status: 'Active' }); return refresh(name + ' added to the position'); }
-        const body = { name, designation: $('#hmDes').value.trim(), deptId: $('#hmDept').value, status: $('#hmStatus').value, isHead: $('#hmHead').checked };
-        if (body.status === 'Vacant') delete body.name;
-        if (isNew) await Store.addMember(body); else await Store.updateMember(x.id, body);
-        await refresh(isNew ? 'Added' : 'Saved');
-      } catch (e) { UI.toast(e.message || 'Failed', 'error'); }
+    };
+    $$('[data-hp]').forEach((b) => {
+      const go = () => { const x = byId[b.dataset.hp]; if (x) openSheet(x); };
+      b.addEventListener('click', go);
+      b.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); go(); } });
     });
-    attachModalCloses();
+
+    // ---- add / edit ----
+    function openMemberModal(x, parentId, fillOnly) {
+      const isNew = !x;
+      const banned = x ? descIds(x.id) : new Set();
+      const mgrOpts = nodes.filter((n) => n.kind !== 'info' && !banned.has(n.id)).map((n) => `<option value="${esc(n.id)}" ${(x ? x.parentId : parentId) === n.id ? 'selected' : ''}>${esc((n.kind === 'unit' ? '[Team] ' : '') + (n.name || 'Vacant') + (n.designation ? ' - ' + n.designation : ''))}</option>`).join('');
+      const kind = x ? x.kind : 'person';
+      const defDept = x ? x.deptId : ((byId[parentId] || {}).deptId || '');
+      modal(`<div class="m-head"><div class="m-ico brand">${I('people', 20)}</div><div><h3>${fillOnly ? 'Fill vacant position' : isNew ? 'Add to the org chart' : 'Edit'}</h3><p>${fillOnly ? esc(x.designation) : 'Changes are visible to the department HOD straight away'}</p></div></div>
+        <div class="m-body">
+          ${fillOnly ? '' : `<label class="fld"><span>Type</span><select class="inp" id="hmKind"><option value="person" ${kind === 'person' ? 'selected' : ''}>Person / position</option><option value="unit" ${kind === 'unit' ? 'selected' : ''}>Team label (box without a person)</option><option value="info" ${kind === 'info' ? 'selected' : ''}>Note box (headcount etc.)</option></select></label>`}
+          <label class="fld"><span id="hmNameL">${kind === 'person' || fillOnly ? 'Name' : 'Text'}</span><input class="inp" id="hmName" value="${esc(x && x.status !== 'Vacant' ? x.name : '')}" placeholder="Full name"></label>
+          ${fillOnly ? '' : `<div id="hmPersonOnly"><label class="fld"><span>Designation</span><input class="inp" id="hmDes" value="${esc(x ? x.designation : '')}" placeholder="e.g. Assistant Manager - Planning"></label>
+          <div style="display:flex;gap:10px"><label class="fld" style="flex:1"><span>Grade</span><input class="inp" id="hmGrade" value="${esc(x ? x.grade : '')}" placeholder="e.g. M3"></label><label class="fld" style="flex:2"><span>Location</span><input class="inp" id="hmLoc" value="${esc(x ? x.location : '')}" placeholder="e.g. Karachi"></label></div>
+          <label class="fld"><span>Status</span><select class="inp" id="hmStatus"><option value="Active" ${!x || x.status !== 'Vacant' ? 'selected' : ''}>Active</option><option value="Vacant" ${x && x.status === 'Vacant' ? 'selected' : ''}>Vacant (position open, no name)</option></select></label>
+          <label class="fld"><span>Mark as</span><select class="inp" id="hmFlag"><option value="">Normal</option><option value="consultant" ${x && x.flag === 'consultant' ? 'selected' : ''}>Consultant (blue)</option><option value="alert" ${x && x.flag === 'alert' ? 'selected' : ''}>Red flag</option></select></label>
+          <label class="fld" style="flex-direction:row;gap:8px;align-items:center"><input type="checkbox" id="hmHead" ${x && x.isHead ? 'checked' : ''}> <span>Head of this department</span></label></div>
+          <label class="fld"><span>Reports to</span><select class="inp" id="hmParent">${mgrOpts}</select></label>
+          <label class="fld"><span>Department</span><select class="inp" id="hmDept"><option value="">None</option>${H.departments.map((d) => `<option value="${esc(d.id)}" ${defDept === d.id ? 'selected' : ''}>${esc(d.name)}</option>`).join('')}</select></label>
+          <label class="fld"><span>Note (optional)</span><input class="inp" id="hmNote" value="${esc(x ? x.note : '')}" placeholder="e.g. Night shift, Hospitals"></label>`}
+        </div>
+        <div class="m-foot"><button class="btn btn-outline" data-dismiss>Cancel</button><button class="btn btn-primary" id="hmSave">${I('check', 15)} Save</button></div>`);
+      const kSel = $('#hmKind');
+      const sync = () => { const k = kSel ? kSel.value : 'person'; const po = $('#hmPersonOnly'); if (po) po.style.display = k === 'person' ? '' : 'none'; const l = $('#hmNameL'); if (l) l.textContent = k === 'person' ? 'Name' : 'Text'; };
+      if (kSel) { kSel.addEventListener('change', sync); sync(); }
+      $('#hmSave').addEventListener('click', async () => {
+        const name = $('#hmName').value.trim();
+        try {
+          if (fillOnly) { if (!name) return UI.toast('Please enter the name', 'error'); await Store.updateMember(x.id, { name, status: 'Active' }); return refresh(name + ' added to the position'); }
+          const k = $('#hmKind').value;
+          const body = { kind: k, name, parentId: $('#hmParent').value, deptId: $('#hmDept').value, note: $('#hmNote').value.trim() };
+          if (k === 'person') Object.assign(body, { designation: $('#hmDes').value.trim(), grade: $('#hmGrade').value.trim(), location: $('#hmLoc').value.trim(), status: $('#hmStatus').value, flag: $('#hmFlag').value, isHead: $('#hmHead').checked });
+          if (body.status === 'Vacant') delete body.name;
+          if (isNew) await Store.addMember(body); else await Store.updateMember(x.id, body);
+          await refresh(isNew ? 'Added' : 'Saved');
+        } catch (e) { UI.toast(e.message || 'Failed', 'error'); }
+      });
+      attachModalCloses();
+    }
+    const nw = $('#hNew'); if (nw) nw.addEventListener('click', () => openMemberModal(null, (roots[0] || {}).id || ''));
   }
 
   // ---------- Applications (resume screening) ----------
