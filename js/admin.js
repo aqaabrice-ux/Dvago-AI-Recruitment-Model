@@ -2126,7 +2126,7 @@
       </div></div></div>
       <div class="panels"><div class="panel"><div class="panel-head"><div><h3>Danger zone</h3><div class="sub">Irreversible actions</div></div></div><div class="panel-body" style="display:flex;flex-direction:column;gap:10px">
         <button class="btn btn-outline" id="bExport">${I('download', 15)} Export all data</button>
-        <button class="btn btn-danger" id="bClear">${I('trash', 15)} Clear all candidates & invites</button>
+        <button class="btn btn-danger" id="bClear">${I('trash', 15)} Clear all candidates, applications & invites</button>
       </div></div></div>
       <div class="panel"><div class="panel-body"><button class="btn btn-primary" id="saveS">${I('check', 15)} Save settings</button></div></div>`;
     ['scPass', 'scRev'].forEach((id) => { const el = $('#' + id); if (el) el.addEventListener('input', () => { $('#' + id.replace('Rev', 'Rev') + 'V').textContent = el.value; }); });
@@ -2143,7 +2143,7 @@
       const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = 'dvago-export-' + new Date().toISOString().slice(0, 10) + '.json'; a.click();
     });
     $('#bClear').addEventListener('click', () => {
-      modal(`<div class="m-head"><div class="m-ico bad">${I('alert', 20)}</div><div><h3>Clear everything?</h3><p>This will permanently delete all candidates, submissions and invitations. This cannot be undone.</p></div></div><div class="m-foot"><button class="btn btn-outline" data-dismiss>Cancel</button><button class="btn btn-danger" id="confClear">Yes, clear all</button></div>`);
+      modal(`<div class="m-head"><div class="m-ico bad">${I('alert', 20)}</div><div><h3>Clear everything?</h3><p>This will permanently delete all applications, candidates, interviews, invitations, resumes and recordings, so the same email can apply again. Positions, users, questions and settings are kept. This cannot be undone.</p></div></div><div class="m-foot"><button class="btn btn-outline" data-dismiss>Cancel</button><button class="btn btn-danger" id="confClear">Yes, clear all</button></div>`);
       $('#confClear').addEventListener('click', async () => { await Store.clearAll(); allData = []; data = []; UI.toast('All data cleared', 'success'); closeModal(); switchTab('dashboard'); });
       attachModalCloses();
     });
