@@ -1108,7 +1108,7 @@
   const offerSt = (d) => (d.offer && d.offer.status) || 'none';
   const needsMe = (d) => (isMaster() ? !(d.reviews || []).length : !myReview(d)) && !['accepted', 'declined'].includes(offerSt(d));
   const fbCount = () => fbList().filter(needsMe).length;
-  const fbStage = (d) => { const o = offerSt(d); if (['sent', 'accepted', 'declined'].includes(o)) return 'sent'; if (['approved', 'ready'].includes(o)) return 'offer'; return (d.reviews || []).length ? 'feedback' : 'awaiting'; };
+  const fbStage = (d) => { const o = offerSt(d); if (['sent', 'accepted', 'declined'].includes(o)) return o; if (['approved', 'ready'].includes(o)) return 'offer'; return (d.reviews || []).length ? 'feedback' : 'awaiting'; };
   const OFFER_META = { none: null, approved: { label: 'Offer approved · salary pending', cls: 'b-info' }, ready: { label: 'Offer ready to send', cls: 'b-info' }, sent: { label: 'Offer sent', cls: 'b-good' }, accepted: { label: 'Offer accepted', cls: 'b-good' }, declined: { label: 'Offer declined', cls: 'b-bad' } };
   const interviewOver = (d) => d.round2 && d.round2.slot && new Date(d.round2.slot.at).getTime() + (d.round2.slot.durationMin || 45) * 60000 < Date.now();
 
@@ -1149,7 +1149,7 @@
         <div class="actions"><button class="btn btn-outline btn-sm" id="refreshBtn">${I('refresh', 15)} Refresh</button></div>
       </div>
       <div class="sec-tabs" id="fbTabs" style="margin-bottom:16px">
-        ${[['all', 'All', all.length], ['awaiting', 'Awaiting feedback', cnt('awaiting')], ['feedback', 'Feedback in', cnt('feedback')], ['offer', 'Offer in progress', cnt('offer')], ['sent', 'Offer sent', cnt('sent')]].map(([k, l, n]) => `<button class="sec-tab ${f === k ? 'active' : ''}" data-f="${k}">${esc(l)} (${n})</button>`).join('')}
+        ${[['all', 'All', all.length], ['awaiting', 'Awaiting feedback', cnt('awaiting')], ['feedback', 'Feedback in', cnt('feedback')], ['offer', 'Offer in progress', cnt('offer')], ['sent', 'Offer sent', cnt('sent')], ['accepted', 'Accepted', cnt('accepted')], ['declined', 'Declined', cnt('declined')]].map(([k, l, n]) => `<button class="sec-tab ${f === k ? 'active' : ''}" data-f="${k}">${esc(l)} (${n})</button>`).join('')}
       </div>
       <div class="rv-list">
         ${items.length === 0 ? `<div class="table-wrap"><div class="empty"><div class="ei">${I('star', 24)}</div><h3>Nothing here yet</h3><p>Candidates appear once their 2nd-round interview is scheduled.</p></div></div>` : items.map((d) => {
@@ -1160,7 +1160,7 @@
               <div class="rv-c2"><small>Role</small><b>${esc(d.positionTitle || d.roleTitle)}</b><span>AI score ${d.evaluation?.overall || 0}%</span></div>
               <div class="rv-c2"><small>Interview</small><b>${esc(slotLabel(r2.slot.at))}</b><span>${r2.mode === 'onsite' ? 'On-site' : 'Online'}${r2.interviewer ? ' · ' + esc(r2.interviewer) : ''}</span></div>
               <div class="rv-c5 fb-c4"><small>Panel feedback</small>${reviewBlock(d)}</div>
-              <div class="rv-c5"><small>Offer</small>${om ? `<span class="badge ${om.cls}">${om.label}</span>` : '<span class="rv-note">Not started</span>'}${d.offer && d.offer.send && d.offer.send.state === 'failed' ? `<div class="rv-note bad" title="${esc(d.offer.send.error)}">${I('alert', 11)} Email failed</div>` : ''}${d.offer && d.offer.send && d.offer.send.state === 'queued' ? `<div class="rv-note">Saved in Email outbox (email not connected)</div>` : ''}${d.offer && d.offer.salary && isMaster() ? `<div class="rv-note">PKR ${Number(d.offer.salary).toLocaleString()} / month</div>` : ''}</div>
+              <div class="rv-c5"><small>Offer</small>${om ? `<span class="badge ${om.cls}">${om.label}</span>` : '<span class="rv-note">Not started</span>'}${d.offer && d.offer.send && d.offer.send.state === 'failed' ? `<div class="rv-note bad" title="${esc(d.offer.send.error)}">${I('alert', 11)} Email failed</div>` : ''}${d.offer && d.offer.send && d.offer.send.state === 'queued' ? `<div class="rv-note">Saved in Email outbox (email not connected)</div>` : ''}${d.offer && d.offer.respondedAt ? `<div class="rv-note" style="color:${offerSt(d) === 'accepted' ? 'var(--brand-dark)' : '#b3261e'}">Candidate ${offerSt(d) === 'accepted' ? 'accepted' : 'declined'} · ${esc(slotLabel(d.offer.respondedAt))}${d.offer.respondedVia === 'email' ? ' · via email' : ''}</div>` : ''}${d.offer && d.offer.salary && isMaster() ? `<div class="rv-note">PKR ${Number(d.offer.salary).toLocaleString()} / month</div>` : ''}</div>
             </div>
             <div class="rv-actions">
               <button class="btn btn-outline btn-sm" data-fa="view" data-id="${d.id}">${I('right', 14)} View</button>
@@ -1173,6 +1173,15 @@
     $$('#fbTabs .sec-tab').forEach((b) => b.addEventListener('click', () => { state.fbFilter = b.dataset.f; renderFeedback(); }));
     $('#refreshBtn').addEventListener('click', async () => { await loadData(); renderNav(); UI.toast('Refreshed', 'success'); renderFeedback(); });
     $$('[data-fa]').forEach((b) => b.addEventListener('click', () => feedbackAction(b.dataset.fa, b.dataset.id, renderFeedback)));
+    // The candidate answers from the offer email, so pick up new answers by themselves while this page is open.
+    clearInterval(state.fbTimer);
+    state.fbTimer = setInterval(async () => {
+      if (state.tab !== 'feedback' || state.candidateId || document.hidden || !$('#fbTabs') || document.querySelector('.modal-back:not(.hidden)')) return;
+      const sig = () => JSON.stringify(fbList().map((d) => [d.id, offerSt(d)]));
+      const before = sig();
+      try { await loadData(); } catch (e) { return; }
+      if (sig() !== before) { renderNav(); renderFeedback(); UI.toast('Offer response received', 'success'); }
+    }, 20000);
   }
 
   function openFeedbackModal(d, after) {
