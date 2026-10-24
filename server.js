@@ -355,7 +355,8 @@ function buildReplyEmail(sub, accepted) {
   if (accepted) {
     const lines = [`Welcome to the DVAGO family! We are delighted that you have accepted our offer for the position of ${pos}, and we look forward to working with you.`,
       form ? 'To get your joining started, please fill in the short form below and upload the documents it asks for (for example your CNIC, education and experience documents and a recent photograph). Please keep the files clear and readable.' : 'Our HR team will contact you shortly with the list of documents we need from you to start your joining process.',
-      'Once we have your documents, we will send your formal appointment letter and the joining details. If you have any questions in the meantime, simply reply to this email.'];
+      form ? 'If you already submitted your documents from the page that opened when you pressed Accept, you are all set and do not need to submit them again. This email is only your copy of the link.' : '',
+      'Once we have your documents, we will send your formal appointment letter and the joining details. If you have any questions in the meantime, simply reply to this email.'].filter(Boolean);
     const text = [`Dear ${first},`, '', lines.join('\n\n'), form ? '\nDocuments form: ' + form : '', '', 'Warm regards,', R2_SENDER_NAME, 'DVAGO'].join('\n');
     const html = `<div style="font-family:Arial,Helvetica,sans-serif;font-size:14px;line-height:1.6;color:#1a1f36"><p>Dear ${hesc(first)},</p>${lines.map((l) => `<p>${hesc(l)}</p>`).join('')}${form ? `<p style="margin:16px 0">${btnHtml(form, 'Submit your documents', '#2f7d1f', '#ffffff')}</p>` : ''}<p>Warm regards,<br>${hesc(R2_SENDER_NAME)}<br>DVAGO</p></div>`;
     return { to: c.email || '', subject: `Welcome to DVAGO – next steps (${pos})`, html, text };
@@ -365,7 +366,7 @@ function buildReplyEmail(sub, accepted) {
     'Our door remains open. If your plans change, or you see another role at DVAGO that suits you, we would be happy to hear from you again.'];
   const text = [`Dear ${first},`, '', lines.join('\n\n'), '', 'Warm regards,', R2_SENDER_NAME, 'DVAGO'].join('\n');
   const html = `<div style="font-family:Arial,Helvetica,sans-serif;font-size:14px;line-height:1.6;color:#1a1f36"><p>Dear ${hesc(first)},</p>${lines.map((l) => `<p>${hesc(l)}</p>`).join('')}<p>Warm regards,<br>${hesc(R2_SENDER_NAME)}<br>DVAGO</p></div>`;
-  return { to: c.email || '', subject: `Thank you from DVAGO (${pos})`, html, text };
+  return { to: c.email || '', subject: `Re: Job offer – DVAGO (${pos})`, html, text };
 }
 // Offer email. Sent through the platform mailer (SMTP) for now; set OFFER_SCRIPT_URL + OFFER_SCRIPT_KEY to hand it to an Apps Script web app instead
 // (same request shape as the Round 2 script: { key, to, subject, html, text, kind:'offer' }).
@@ -957,7 +958,7 @@ async function api(req, res, url) {
       return page(200, 'Your decision', `<h1>${a === 'accept' ? 'Accept' : 'Decline'} the offer for ${hesc(pos)}?</h1><p>${hesc(first ? first + ', please' : 'Please')} confirm your decision.</p>
         <button class="b ${a === 'accept' ? 'g' : 'r'}" id="go">${a === 'accept' ? 'Yes, I accept the offer' : 'Yes, I decline the offer'}</button><a class="b l" href="#" id="sw"></a><p id="m" style="font-size:13px"></p>
         <script>var T=${JSON.stringify(q.get('t'))},A=${JSON.stringify(a)};var sw=document.getElementById('sw');sw.textContent=A==='accept'?'I want to decline instead':'I want to accept instead';sw.href='?t='+T+'&a='+(A==='accept'?'decline':'accept');
-        document.getElementById('go').onclick=function(){var b=this;b.disabled=true;b.textContent='Please wait...';fetch('/api/offer-reply',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({t:T,a:A})}).then(function(r){return r.json()}).then(function(d){if(d.error)throw new Error(d.error);var c=document.querySelector('.c');c.innerHTML=d.accepted?'<h1>Congratulations and welcome!</h1><p>Your acceptance is recorded. We have emailed you the next steps.</p>'+(d.formUrl?'<p><a class="b g" href="'+d.formUrl+'">Submit your documents</a></p>':''):'<h1>Thank you</h1><p>Your response is recorded. We appreciate your time and wish you every success.</p>';}).catch(function(e){b.disabled=false;b.textContent='Try again';document.getElementById('m').textContent=e.message||'Something went wrong';});};</script>`);
+        document.getElementById('go').onclick=function(){var b=this;b.disabled=true;b.textContent='Please wait...';fetch('/api/offer-reply',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({t:T,a:A})}).then(function(r){return r.json()}).then(function(d){if(d.error)throw new Error(d.error);var c=document.querySelector('.c');c.innerHTML=d.accepted?'<h1>Congratulations and welcome!</h1><p>Your acceptance is recorded. The last step is to submit your joining documents.</p>'+(d.formUrl?'<p><a class="b g" href="'+d.formUrl+'">Submit your documents</a></p><p style="font-size:13px">Please keep this page open until you have submitted the form. We will confirm by email once your documents are received.</p>':'<p>Our HR team will contact you shortly with the list of documents.</p>'):'<h1>Thank you</h1><p>Your response is recorded. We appreciate your time and wish you every success.</p>';}).catch(function(e){b.disabled=false;b.textContent='Try again';document.getElementById('m').textContent=e.message||'Something went wrong';});};</script>`);
     }
     if (m === 'POST') {
       const b = await readBody(req);
@@ -972,7 +973,7 @@ async function api(req, res, url) {
       sub.stage = accepted ? 'Hired' : 'Rejected';
       log(accepted ? 'Candidate accepted the offer (email button)' : 'Candidate declined the offer (email button)');
       persist();
-      try { const out = await deliverMail(buildReplyEmail(sub, accepted), sub, 'reply'); o.reply = { state: out.state, via: out.via, at: now, error: '' }; log(out.state === 'sent' ? 'Reply email sent to candidate' : 'Reply email saved to Email outbox'); }
+      if (!accepted) try { const out = await deliverMail(buildReplyEmail(sub, false), sub, 'reply'); o.reply = { state: out.state, via: out.via, at: now, error: '' }; log(out.state === 'sent' ? 'Reply email sent to candidate' : 'Reply email saved to Email outbox'); }
       catch (e) { o.reply = { state: 'failed', at: now, error: String(e.message || '').slice(0, 200) }; log('Reply email failed'); }
       const hr = String(process.env.HR_NOTIFY_EMAIL || '').trim();
       if (hr) {
