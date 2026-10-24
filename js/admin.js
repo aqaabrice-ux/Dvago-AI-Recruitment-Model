@@ -1376,8 +1376,7 @@
     if (!hierData || refetch !== false) { try { hierData = await Store.getHierarchy(); } catch (e) { view.innerHTML = `<div class="empty"><h3>Could not load the org structure</h3><p>${esc(e.message || '')}</p></div>`; return; } }
     const H = hierData, M = !!H.canEdit;
     const f = state.hier = state.hier || {};
-    if (f.q == null) f.q = ''; if (f.status == null) f.status = ''; if (!f.open) f.open = {}; if (!f.mode) f.mode = 'chart';
-    if (f.mode !== 'chart') f.full = false;
+    if (f.q == null) f.q = ''; if (f.status == null) f.status = ''; if (!f.open) f.open = {};
     const nodes = H.nodes || [];
     const byId = {}, kids = {};
     nodes.forEach((x) => { byId[x.id] = x; });
@@ -1442,23 +1441,10 @@
     document.body.classList.toggle('org-full', full);
     const expBtns = `<button type="button" class="btn btn-outline btn-sm js-exp">Expand all</button><button type="button" class="btn btn-outline btn-sm js-col">Collapse all</button>`;
     const bar = `<div class="ochart-bar">${full ? `<b class="ob-t">Org structure</b>` : ''}${crumb}<span class="grow"></span>
-        ${full ? `<input class="inp ob-q" id="hQ2" placeholder="Search" value="${esc(f.q)}">${expBtns}` : ''}
+        ${full ? `<input class="inp ob-q" id="hQ2" placeholder="Search" value="${esc(f.q)}">` : ''}
         <span class="ob-zoom"><button type="button" class="btn btn-outline btn-sm" id="zOut" title="Zoom out">−</button><span id="zVal">${Math.round(f.zoom * 100)}%</span><button type="button" class="btn btn-outline btn-sm" id="zIn" title="Zoom in">+</button><button type="button" class="btn btn-outline btn-sm" id="zFit" title="Fit the whole chart to the screen width">Fit</button></span>
-        <button type="button" class="btn ${full ? 'btn-primary' : 'btn-outline'} btn-sm" id="oFull">${full ? 'Exit full screen' : '⤢ Full screen'}</button></div>`;
-    // ---- tree (outline) and list (table) views ----
-    const trow = (x, depth) => {
-      const ks = kidsOf(x.id).filter((k) => !keep || keep.has(k.id));
-      const open = ks.length > 0 && isOpen(x.id, depth);
-      const tot = countPeople(x.id);
-      return `<li><div class="tv-r">${ks.length ? `<button type="button" class="tv-t ${open ? 'open' : ''}" data-tg="${esc(x.id)}" data-depth="${depth}" title="${ks.length} direct · ${tot} people in this branch">${open ? '▾' : '▸'}</button>` : '<span class="tv-t"></span>'}${card(x, depth, true)}${ks.length ? `<span class="tv-n">${ks.length} direct${tot > ks.length ? ' · ' + tot + ' in branch' : ''}</span>` : ''}</div>${open ? `<ul>${ks.map((k) => trow(k, depth + 1)).join('')}</ul>` : ''}</li>`;
-    };
-    const inScope = new Set(); chartRoots.forEach((r) => descIds(r.id).forEach((i) => inScope.add(i)));
-    const listRows = nodes.filter((x) => x.kind === 'person' && inScope.has(x.id) && (!searching || matched.has(x.id)));
-    const depName = (id) => { const d = H.departments.find((z) => z.id === id); return d ? d.name : ''; };
-    const flagTxt = (x) => (x.status === 'Vacant' ? 'Vacant' : x.flag === 'consultant' ? 'Consultant' : x.flag === 'alert' ? 'Marked red' : 'Active');
-    const list = `<div class="tcard"><table class="tbl"><thead><tr><th>Name</th><th>Designation</th><th>Department</th><th>Reports to</th><th>Grade</th><th>Location</th><th>Status</th><th></th></tr></thead><tbody>${listRows.map((x) => { const m = byId[x.parentId]; const vac = x.status === 'Vacant'; return `<tr data-hp="${esc(x.id)}" tabindex="0"><td><b>${vac ? 'Vacant position' : esc(x.name)}</b></td><td>${esc(x.designation)}</td><td>${esc(depName(x.deptId))}</td><td>${m ? esc(m.name || m.designation || '') : ''}</td><td>${esc(x.grade)}</td><td>${esc(x.location)}</td><td><span class="pill ${vac ? 'warn' : ''}">${flagTxt(x)}</span></td><td><button type="button" class="jdb2" data-jd="${esc(x.id)}">JD</button></td></tr>`; }).join('') || '<tr><td colspan="8" style="text-align:center;color:var(--muted)">No one matches this search</td></tr>'}</tbody></table></div>`;
-    const tview = `<div class="tcard tv"><ul class="tv-ul">${chartRoots.map((r) => trow(r, 0)).join('')}</ul></div>`;
-    const chart = !chartRoots.length ? '' : f.mode === 'list' ? list : f.mode === 'tree' ? tview : `<div class="ochart ${full ? 'full' : ''}" id="oChart">${bar}<div class="otree"><ul class="ot" style="zoom:${f.zoom}">${chartRoots.map((r) => node(r, 0)).join('')}</ul></div></div>`;
+        ${expBtns}<button type="button" class="btn ${full ? 'btn-primary' : 'btn-outline'} btn-sm" id="oFull">${full ? 'Exit full screen' : '⤢ Full screen'}</button></div>`;
+    const chart = !chartRoots.length ? '' : `<div class="ochart ${full ? 'full' : ''}" id="oChart">${bar}<div class="otree"><ul class="ot" style="zoom:${f.zoom}">${chartRoots.map((r) => node(r, 0)).join('')}</ul></div></div>`;
     const chartOrEmpty = chart || `<div class="empty"><h3>${searching ? 'No one matches this search' : 'Nothing to show'}</h3><p>${searching ? 'Try a different name or clear the filter.' : (M ? 'Pick a department or add people.' : 'No team is assigned to your account yet.')}</p></div>`;
     const sc = $('.otree');
     const keepScroll = sc ? { x: sc.scrollLeft, y: sc.scrollTop } : null;
@@ -1467,11 +1453,9 @@
       <div class="h-tools"><input class="inp" id="hQ" placeholder="Search name, designation or city" value="${esc(f.q)}" style="max-width:300px">
         ${[['', 'All'], ['Active', 'Active'], ['Vacant', 'Vacant']].map(([k, l]) => `<button class="btn btn-sm ${f.status === k ? 'btn-primary' : 'btn-outline'}" data-hs="${k}">${l}</button>`).join('')}
         ${searching ? `<span class="muted" style="font-size:13px">${hits} match${hits === 1 ? '' : 'es'}</span>` : ''}
-        <span class="grow"></span>
-        <span class="seg">${[['chart', 'Chart'], ['tree', 'Tree'], ['list', 'List']].map(([k, l]) => `<button class="btn btn-sm ${f.mode === k ? 'btn-primary' : 'btn-outline'}" data-vm="${k}">${l}</button>`).join('')}</span>
-        ${f.mode === 'list' ? '' : expBtns}</div>
+</div>
       <div class="o-legend"><span><i style="background:#fff8b8"></i>Vacant</span><span><i style="background:#d6efff"></i>Consultant</span><span><i style="background:#ffe1df"></i>Marked red in the organogram</span><span><i style="background:var(--brand-pale)"></i>Head of department</span></div>
-      ${f.mode === 'chart' ? '' : crumb}${chartOrEmpty}`;
+      ${chartOrEmpty}`;
     const sc2 = $('.otree'); if (sc2 && keepScroll) { sc2.scrollLeft = keepScroll.x; sc2.scrollTop = keepScroll.y; }
 
     ['#hQ', '#hQ2'].forEach((sel) => {
@@ -1496,7 +1480,6 @@
     $$('[data-hs]').forEach((b) => b.addEventListener('click', () => { f.status = b.dataset.hs; renderHierarchy(false); }));
     $$('[data-focus]').forEach((b) => b.addEventListener('click', () => { f.focus = b.dataset.focus || null; renderHierarchy(false); }));
     $$('[data-tg]').forEach((b) => b.addEventListener('click', (e) => { e.stopPropagation(); const id = b.dataset.tg; f.open[id] = !isOpen(id, +b.dataset.depth); renderHierarchy(false); }));
-    $$('[data-vm]').forEach((b) => b.addEventListener('click', () => { f.mode = b.dataset.vm; renderHierarchy(false); }));
     $$('.js-exp').forEach((b) => b.addEventListener('click', () => { roots.forEach((r) => descIds(r.id).forEach((i) => { f.open[i] = true; })); renderHierarchy(false); }));
     $$('.js-col').forEach((b) => b.addEventListener('click', () => { f.open = {}; renderHierarchy(false); }));
 
