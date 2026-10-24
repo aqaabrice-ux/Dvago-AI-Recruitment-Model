@@ -326,8 +326,15 @@ function cleanReview(b, who) {
   return { key: who.key, by: who.name, byRole: who.role, at: new Date().toISOString(), ratings, overall, recommend: ['go', 'hold', 'no'].includes(b.recommend) ? b.recommend : 'hold', feedback: s(b.feedback, 2000) };
 }
 const reviewerKey = (a) => (a.role === 'master' ? 'master' : a.userId);
-function buildOfferEmail(sub) {
+// The candidate answers the offer with one of two buttons in the email. Each button opens /api/offer-reply?t=<token>&a=accept|decline,
+// which asks for one more click before recording the answer (mail scanners open links, so a plain GET never changes anything).
+const ensureOfferToken = (o) => { if (!o.token) o.token = crypto.randomBytes(18).toString('hex'); return o.token; };
+const offerLink = (base, o, a) => `${base}/api/offer-reply?t=${ensureOfferToken(o)}&a=${a}`;
+const DOCS_FORM_URL = () => String(process.env.DOCS_FORM_URL || '').trim();
+const btnHtml = (href, label, bg, fg) => `<a href="${hesc(href)}" style="display:inline-block;padding:12px 26px;margin:0 10px 8px 0;border-radius:8px;background:${bg};color:${fg};font-weight:bold;text-decoration:none;font-family:Arial,Helvetica,sans-serif;font-size:14px">${hesc(label)}</a>`;
+function buildOfferEmail(sub, base) {
   const o = sub.offer || {}, c = sub.candidate || {};
+  const acceptUrl = offerLink(base || '', o, 'accept'), declineUrl = offerLink(base || '', o, 'decline');
   const first = String(c.fullName || 'there').trim().split(/\s+/)[0];
   const pos = sub.positionTitle || sub.roleTitle || 'the position';
   const sal = 'PKR ' + Number(o.salary || 0).toLocaleString('en-US');
@@ -335,16 +342,35 @@ function buildOfferEmail(sub) {
   const rows = [['Position', pos], ['Department', sub.roleTitle || ''], ['Monthly gross salary', sal]];
   if (join) rows.push(['Proposed joining date', join]);
   const intro = `We are delighted to offer you the position of ${pos} at DVAGO. Thank you for the time and effort you put into our interview process.`;
-  const outro = 'To accept this offer, please reply to this email. A formal appointment letter with the full terms will follow once you accept. This offer is subject to document verification.';
-  const text = [`Dear ${first},`, '', intro, '', rows.map(([k, v]) => `${k}: ${v}`).join('\n'), o.note ? '\nNote: ' + o.note : '', '', outro, '', 'Best regards,', R2_SENDER_NAME, 'DVAGO'].join('\n');
+  const outro = 'Please let us know your decision by clicking one of the two options below. If you accept, we will send you a short form to submit your documents, and a formal appointment letter with the full terms will follow. This offer is subject to document verification.';
+  const text = [`Dear ${first},`, '', intro, '', rows.map(([k, v]) => `${k}: ${v}`).join('\n'), o.note ? '\nNote: ' + o.note : '', '', outro, '', 'Accept the offer: ' + acceptUrl, 'Decline the offer: ' + declineUrl, '', 'Best regards,', R2_SENDER_NAME, 'DVAGO'].join('\n');
   const tr = rows.map(([k, v]) => `<tr><td style="padding:6px 16px 6px 0;color:#667;white-space:nowrap">${hesc(k)}</td><td style="padding:6px 0"><b>${hesc(v)}</b></td></tr>`).join('');
-  const html = `<div style="font-family:Arial,Helvetica,sans-serif;font-size:14px;line-height:1.6;color:#1a1f36"><p>Dear ${hesc(first)},</p><p>${hesc(intro)}</p><table style="border-collapse:collapse;margin:12px 0">${tr}</table>${o.note ? `<p><b>Note:</b> ${hesc(o.note)}</p>` : ''}<p>${hesc(outro)}</p><p>Best regards,<br>${hesc(R2_SENDER_NAME)}<br>DVAGO</p></div>`;
+  const html = `<div style="font-family:Arial,Helvetica,sans-serif;font-size:14px;line-height:1.6;color:#1a1f36"><p>Dear ${hesc(first)},</p><p>${hesc(intro)}</p><table style="border-collapse:collapse;margin:12px 0">${tr}</table>${o.note ? `<p><b>Note:</b> ${hesc(o.note)}</p>` : ''}<p>${hesc(outro)}</p><p style="margin:18px 0 6px">${btnHtml(acceptUrl, 'Offer accepted', '#2f7d1f', '#ffffff')}${btnHtml(declineUrl, 'Offer rejected', '#ffffff', '#8a2a2a').replace('display:inline-block', 'border:1px solid #c9a0a0;display:inline-block')}</p><p>Best regards,<br>${hesc(R2_SENDER_NAME)}<br>DVAGO</p></div>`;
   return { to: c.email || '', subject: `Job offer – DVAGO (${pos})`, html, text };
+}
+// Replies sent automatically once the candidate answers the offer.
+function buildReplyEmail(sub, accepted) {
+  const c = sub.candidate || {}, first = String(c.fullName || 'there').trim().split(/\s+/)[0], pos = sub.positionTitle || sub.roleTitle || 'the position';
+  const form = DOCS_FORM_URL();
+  if (accepted) {
+    const lines = [`Welcome to the DVAGO family! We are delighted that you have accepted our offer for the position of ${pos}, and we look forward to working with you.`,
+      form ? 'To get your joining started, please fill in the short form below and upload the documents it asks for (for example your CNIC, education and experience documents and a recent photograph). Please keep the files clear and readable.' : 'Our HR team will contact you shortly with the list of documents we need from you to start your joining process.',
+      'Once we have your documents, we will send your formal appointment letter and the joining details. If you have any questions in the meantime, simply reply to this email.'];
+    const text = [`Dear ${first},`, '', lines.join('\n\n'), form ? '\nDocuments form: ' + form : '', '', 'Warm regards,', R2_SENDER_NAME, 'DVAGO'].join('\n');
+    const html = `<div style="font-family:Arial,Helvetica,sans-serif;font-size:14px;line-height:1.6;color:#1a1f36"><p>Dear ${hesc(first)},</p>${lines.map((l) => `<p>${hesc(l)}</p>`).join('')}${form ? `<p style="margin:16px 0">${btnHtml(form, 'Submit your documents', '#2f7d1f', '#ffffff')}</p>` : ''}<p>Warm regards,<br>${hesc(R2_SENDER_NAME)}<br>DVAGO</p></div>`;
+    return { to: c.email || '', subject: `Welcome to DVAGO – next steps (${pos})`, html, text };
+  }
+  const lines = [`Thank you for your interest in DVAGO and for the time and effort you put into our interview process. We completely understand and respect your decision to decline the offer for ${pos}.`,
+    'There are no worries at all if this opportunity is not the right fit for you at this time. Choosing the right move for your career is important, and we wish you every success in what comes next.',
+    'Our door remains open. If your plans change, or you see another role at DVAGO that suits you, we would be happy to hear from you again.'];
+  const text = [`Dear ${first},`, '', lines.join('\n\n'), '', 'Warm regards,', R2_SENDER_NAME, 'DVAGO'].join('\n');
+  const html = `<div style="font-family:Arial,Helvetica,sans-serif;font-size:14px;line-height:1.6;color:#1a1f36"><p>Dear ${hesc(first)},</p>${lines.map((l) => `<p>${hesc(l)}</p>`).join('')}<p>Warm regards,<br>${hesc(R2_SENDER_NAME)}<br>DVAGO</p></div>`;
+  return { to: c.email || '', subject: `Thank you from DVAGO (${pos})`, html, text };
 }
 // Offer email. Sent through the platform mailer (SMTP) for now; set OFFER_SCRIPT_URL + OFFER_SCRIPT_KEY to hand it to an Apps Script web app instead
 // (same request shape as the Round 2 script: { key, to, subject, html, text, kind:'offer' }).
-async function sendOfferEmail(sub) {
-  const mail = buildOfferEmail(sub);
+const sendOfferEmail = (sub, base) => deliverMail(buildOfferEmail(sub, base), sub, 'offer');
+async function deliverMail(mail, sub, kind) {
   if (!/^\S+@\S+\.\S+$/.test(mail.to)) throw Object.assign(new Error('Candidate has no valid email'), { status: 400 });
   if (process.env.OFFER_SCRIPT_URL && process.env.OFFER_SCRIPT_KEY) {
     const res = await fetch(process.env.OFFER_SCRIPT_URL, { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' }, body: JSON.stringify({ key: process.env.OFFER_SCRIPT_KEY, kind: 'offer', to: mail.to, name: sub.candidate.fullName, senderName: R2_SENDER_NAME, subject: mail.subject, html: mail.html, text: mail.text }) });
@@ -352,7 +378,7 @@ async function sendOfferEmail(sub) {
     if (!out || !out.ok) throw Object.assign(new Error((out && out.error) || 'Offer email script failed'), { status: 502 });
     return { state: 'sent', via: 'script' };
   }
-  const r = await mailer.send({ to: mail.to, subject: mail.subject, html: mail.html, text: mail.text, meta: { kind: 'offer', refId: sub.id } });
+  const r = await mailer.send({ to: mail.to, subject: mail.subject, html: mail.html, text: mail.text, meta: { kind: kind === 'offer' ? 'offer' : 'offer-' + kind, refId: sub.id } });
   if (r.status === 'sent') return { state: 'sent', via: 'smtp' };
   if (r.status === 'failed') throw Object.assign(new Error(r.error || 'Email failed'), { status: 502 });
   return { state: 'queued', via: 'outbox' };   // email is not configured: the offer is saved in Email outbox only
@@ -914,6 +940,50 @@ async function api(req, res, url) {
   const needMaster = () => { if (needAdmin()) return true; if (admin.role !== 'master') { send(res, 403, { error: 'Only the master admin can do this' }); return true; } return false; };
   const noAccess = () => { send(res, 404, { error: 'Not found' }); return true; };
 
+  // ---- candidate answers the job offer (buttons in the offer email; no login) ----
+  if (r0 === 'offer-reply') {
+    const page = (code, title, body) => { res.writeHead(code, Object.assign({ 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' }, SECURITY_HEADERS)); res.end(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${hesc(title)} – DVAGO</title><link rel="icon" href="/assets/favicon.png"><style>body{margin:0;min-height:100vh;display:grid;place-items:center;background:#f6f8f4;font-family:Arial,Helvetica,sans-serif;color:#1a1f36}.c{max-width:480px;margin:20px;background:#fff;border:1px solid #dfe6da;border-radius:16px;padding:32px 28px;text-align:center;box-shadow:0 6px 24px rgba(15,26,16,.06)}h1{font-size:22px;margin:0 0 10px}p{line-height:1.6;color:#4a5160;margin:8px 0}.b{display:inline-block;margin:14px 6px 0;padding:12px 26px;border-radius:8px;border:0;font:bold 14px Arial;cursor:pointer;text-decoration:none}.g{background:#2f7d1f;color:#fff}.r{background:#fff;color:#8a2a2a;border:1px solid #c9a0a0}.l{background:#fff;color:#555;border:1px solid #ccd}</style></head><body><div class="c">${body}</div></body></html>`); };
+    const findSub = (t) => (/^[a-f0-9]{20,64}$/.test(t || '') ? Object.values(db.submissions).find((s) => s.offer && s.offer.token === t) : null);
+    const docsBtn = () => (DOCS_FORM_URL() ? `<p><a class="b g" href="${hesc(DOCS_FORM_URL())}">Submit your documents</a></p>` : '');
+    const q = url.searchParams;
+    if (m === 'GET') {
+      const sub = findSub(q.get('t')), a = q.get('a') === 'accept' ? 'accept' : 'decline';
+      if (!sub) return page(404, 'Link not found', '<h1>This link is not valid</h1><p>The link may be incomplete or the offer was withdrawn. Please contact DVAGO HR.</p>');
+      const o = sub.offer, pos = sub.positionTitle || sub.roleTitle || 'the position';
+      if (o.status === 'accepted') return page(200, 'Offer accepted', `<h1>You have accepted this offer</h1><p>Thank you! Your response is already recorded.</p>${docsBtn()}`);
+      if (o.status === 'declined') return page(200, 'Offer declined', '<h1>Your response is recorded</h1><p>You have declined this offer. Thank you for letting us know.</p>');
+      if (o.status !== 'sent') return page(409, 'Offer not active', '<h1>This offer is no longer active</h1><p>Please contact DVAGO HR.</p>');
+      const first = String((sub.candidate || {}).fullName || '').trim().split(/\s+/)[0];
+      return page(200, 'Your decision', `<h1>${a === 'accept' ? 'Accept' : 'Decline'} the offer for ${hesc(pos)}?</h1><p>${hesc(first ? first + ', please' : 'Please')} confirm your decision.</p>
+        <button class="b ${a === 'accept' ? 'g' : 'r'}" id="go">${a === 'accept' ? 'Yes, I accept the offer' : 'Yes, I decline the offer'}</button><a class="b l" href="#" id="sw"></a><p id="m" style="font-size:13px"></p>
+        <script>var T=${JSON.stringify(q.get('t'))},A=${JSON.stringify(a)};var sw=document.getElementById('sw');sw.textContent=A==='accept'?'I want to decline instead':'I want to accept instead';sw.href='?t='+T+'&a='+(A==='accept'?'decline':'accept');
+        document.getElementById('go').onclick=function(){var b=this;b.disabled=true;b.textContent='Please wait...';fetch('/api/offer-reply',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({t:T,a:A})}).then(function(r){return r.json()}).then(function(d){if(d.error)throw new Error(d.error);var c=document.querySelector('.c');c.innerHTML=d.accepted?'<h1>Congratulations and welcome!</h1><p>Your acceptance is recorded. We have emailed you the next steps.</p>'+(d.formUrl?'<p><a class="b g" href="'+d.formUrl+'">Submit your documents</a></p>':''):'<h1>Thank you</h1><p>Your response is recorded. We appreciate your time and wish you every success.</p>';}).catch(function(e){b.disabled=false;b.textContent='Try again';document.getElementById('m').textContent=e.message||'Something went wrong';});};</script>`);
+    }
+    if (m === 'POST') {
+      const b = await readBody(req);
+      const sub = findSub(b.t);
+      if (!sub) return send(res, 404, { error: 'This link is not valid' });
+      const o = sub.offer, accepted = b.a === 'accept';
+      if (o.status === 'accepted' || o.status === 'declined') return send(res, 200, { ok: true, accepted: o.status === 'accepted', formUrl: o.status === 'accepted' ? DOCS_FORM_URL() : '', already: true });
+      if (o.status !== 'sent') return send(res, 409, { error: 'This offer is no longer active' });
+      const now = new Date().toISOString(), who = (sub.candidate || {}).fullName || 'Candidate';
+      const log = (event) => { o.history = (o.history || []).concat([{ at: now, event, by: who }]).slice(-30); };
+      o.status = accepted ? 'accepted' : 'declined'; o.respondedAt = now; o.respondedVia = 'email';
+      sub.stage = accepted ? 'Hired' : 'Rejected';
+      log(accepted ? 'Candidate accepted the offer (email button)' : 'Candidate declined the offer (email button)');
+      persist();
+      try { const out = await deliverMail(buildReplyEmail(sub, accepted), sub, 'reply'); o.reply = { state: out.state, via: out.via, at: now, error: '' }; log(out.state === 'sent' ? 'Reply email sent to candidate' : 'Reply email saved to Email outbox'); }
+      catch (e) { o.reply = { state: 'failed', at: now, error: String(e.message || '').slice(0, 200) }; log('Reply email failed'); }
+      const hr = String(process.env.HR_NOTIFY_EMAIL || '').trim();
+      if (hr) {
+        const pos = sub.positionTitle || sub.roleTitle || '', t = `${who} ${accepted ? 'ACCEPTED' : 'DECLINED'} the offer${pos ? ' (' + pos + ')' : ''}`;
+        try { await deliverMail({ to: hr, subject: t, text: t + (accepted ? '\nThe documents form link was sent to the candidate.' : ''), html: `<p>${hesc(t)}</p>${accepted ? '<p>The documents form link was sent to the candidate.</p>' : ''}` }, sub, 'hr'); } catch (e) { /* the response is already recorded */ }
+      }
+      persist();
+      return send(res, 200, { ok: true, accepted, formUrl: accepted ? DOCS_FORM_URL() : '' });
+    }
+    return send(res, 405, { error: 'Method not allowed' });
+  }
   if (r0 === 'health') return send(res, 200, { ok: true, app: 'dvago', version: '2.8', ai: aiEnabled(), model: aiEnabled() ? AI_MODEL : null, mail: mailer.isConfigured(), groq: groqEnabled(), groqModel: groqEnabled() ? GROQ_MODEL : null, tts: TTS_ENABLED && ((groqEnabled() && ttsState.disabledUntil < Date.now()) || (fs.existsSync(TTS_SEED) && fs.readdirSync(TTS_SEED).length > 0)) });
 
   // ---- SARAH follow-up (candidate-public endpoint, uses Groq) ----
@@ -1881,12 +1951,12 @@ async function api(req, res, url) {
         o.note = String(b.note || '').trim().slice(0, 500);
         o.preparedBy = admin.name || 'Admin'; o.preparedAt = now; o.status = 'ready'; o.send = null; log('Salary set'); persist(); return send(res, 200, sub);
       }
-      if (act === 'preview') { if (!o.salary) return send(res, 400, { error: 'Set the salary first' }); const e = buildOfferEmail(sub); return send(res, 200, { to: e.to, subject: e.subject, html: e.html, mailConfigured: !!(mailer.isConfigured() || (process.env.OFFER_SCRIPT_URL && process.env.OFFER_SCRIPT_KEY)) }); }
+      if (act === 'preview') { if (!o.salary) return send(res, 400, { error: 'Set the salary first' }); const e = buildOfferEmail(sub, baseUrl(req)); return send(res, 200, { to: e.to, subject: e.subject, html: e.html, mailConfigured: !!(mailer.isConfigured() || (process.env.OFFER_SCRIPT_URL && process.env.OFFER_SCRIPT_KEY)) }); }
       if (act === 'send') {
         if (!['ready', 'sent'].includes(o.status) || !o.salary) return send(res, 400, { error: 'Set the salary first' });
         try {
-          const out = await sendOfferEmail(sub);
-          o.send = { state: out.state, via: out.via, at: now, error: '' };
+          const out = await sendOfferEmail(sub, baseUrl(req));
+          o.send ={ state: out.state, via: out.via, at: now, error: '' };
           if (out.state === 'sent') { o.status = 'sent'; o.sentAt = now; sub.stage = 'Offer'; }
           log(out.state === 'sent' ? 'Offer emailed' : 'Offer saved to Email outbox (mail not configured)');
           persist(); return send(res, 200, sub);
