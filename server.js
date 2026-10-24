@@ -374,7 +374,7 @@ const sendOfferEmail = (sub, base) => deliverMail(buildOfferEmail(sub, base), su
 async function deliverMail(mail, sub, kind) {
   if (!/^\S+@\S+\.\S+$/.test(mail.to)) throw Object.assign(new Error('Candidate has no valid email'), { status: 400 });
   if (process.env.OFFER_SCRIPT_URL && process.env.OFFER_SCRIPT_KEY) {
-    const res = await fetch(process.env.OFFER_SCRIPT_URL, { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' }, body: JSON.stringify({ key: process.env.OFFER_SCRIPT_KEY, kind: 'offer', to: mail.to, name: sub.candidate.fullName, senderName: R2_SENDER_NAME, subject: mail.subject, html: mail.html, text: mail.text }) });
+    const res = await fetch(process.env.OFFER_SCRIPT_URL, { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' }, body: JSON.stringify({ key: process.env.OFFER_SCRIPT_KEY, kind: 'offer', threadReply: kind === 'reply', to: mail.to, name: sub.candidate.fullName, senderName: R2_SENDER_NAME, subject: mail.subject, html: mail.html, text: mail.text }) });
     let out; try { out = JSON.parse(await res.text()); } catch (e) { throw Object.assign(new Error('Offer email script returned an unexpected response'), { status: 502 }); }
     if (!out || !out.ok) throw Object.assign(new Error((out && out.error) || 'Offer email script failed'), { status: 502 });
     return { state: 'sent', via: 'script' };
