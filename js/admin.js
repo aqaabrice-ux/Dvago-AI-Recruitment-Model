@@ -158,6 +158,8 @@
 
   function render() {
     if (!isMaster() && ['positions', 'roles', 'emails', 'settings', 'org', 'users'].includes(state.tab)) state.tab = 'dashboard';
+    view.classList.toggle('wide', state.tab === 'hierarchy' && !state.candidateId);   // the org chart uses the full width
+    document.body.classList.remove('org-full');
     if (state.candidateId) return renderDetail();
     ({
       org: renderOrg,
@@ -1433,7 +1435,15 @@
     const chain = (id) => { const out = []; let c = byId[id]; while (c) { out.unshift(c); c = byId[c.parentId]; } return out; };
     const crumb = f.focus && byId[f.focus] ? `<div class="o-crumb"><button type="button" data-focus="">All</button>${chain(f.focus).map((c) => `<span>›</span><button type="button" data-focus="${esc(c.id)}">${esc(c.name || c.designation)}</button>`).join('')}</div>` : '';
     const chartRoots = roots.filter((r) => !keep || keep.has(r.id));
-    const chart = chartRoots.length ? `<div class="otree"><ul class="ot">${chartRoots.map((r) => node(r, 0)).join('')}</ul></div>` : `<div class="empty"><h3>${searching ? 'No one matches this search' : 'Nothing to show'}</h3><p>${searching ? 'Try a different name or clear the filter.' : (M ? 'Pick a department or add people.' : 'No team is assigned to your account yet.')}</p></div>`;
+    if (!f.zoom) f.zoom = 1;
+    const full = !!f.full;
+    document.body.classList.toggle('org-full', full);
+    const bar = `<div class="ochart-bar">${full ? `<b class="ob-t">Org structure</b>` : ''}${crumb}<span class="grow"></span>
+        ${full ? `<input class="inp ob-q" id="hQ2" placeholder="Search" value="${esc(f.q)}">` : ''}
+        <button type="button" class="btn btn-outline btn-sm js-exp">Expand all</button><button type="button" class="btn btn-outline btn-sm js-col">Collapse all</button>
+        <span class="ob-zoom"><button type="button" class="btn btn-outline btn-sm" id="zOut" title="Zoom out">−</button><span id="zVal">${Math.round(f.zoom * 100)}%</span><button type="button" class="btn btn-outline btn-sm" id="zIn" title="Zoom in">+</button><button type="button" class="btn btn-outline btn-sm" id="zFit" title="Fit the whole chart to the screen width">Fit</button></span>
+        <button type="button" class="btn ${full ? 'btn-primary' : 'btn-outline'} btn-sm" id="oFull">${full ? 'Exit full screen' : '⤢ Full screen'}</button></div>`;
+    const chart = chartRoots.length ? `<div class="ochart ${full ? 'full' : ''}" id="oChart">${bar}<div class="otree"><ul class="ot" style="zoom:${f.zoom}">${chartRoots.map((r) => node(r, 0)).join('')}</ul></div></div>` : `<div class="empty"><h3>${searching ? 'No one matches this search' : 'Nothing to show'}</h3><p>${searching ? 'Try a different name or clear the filter.' : (M ? 'Pick a department or add people.' : 'No team is assigned to your account yet.')}</p></div>`;
     const sc = $('.otree');
     const keepScroll = sc ? { x: sc.scrollLeft, y: sc.scrollTop } : null;
     view.innerHTML = `<div class="page-head"><div><h1>Org structure</h1><p>${M ? 'Company chart as per the organogram. Click a box for details; ▾ opens a team.' : 'Your team, by branch. ▾ opens a team.'} · ${people.length} positions · ${nAct} active · ${nVac} vacant</p></div>
@@ -1442,16 +1452,33 @@
         ${[['', 'All'], ['Active', 'Active'], ['Vacant', 'Vacant']].map(([k, l]) => `<button class="btn btn-sm ${f.status === k ? 'btn-primary' : 'btn-outline'}" data-hs="${k}">${l}</button>`).join('')}
         ${searching ? `<span class="muted" style="font-size:13px">${hits} match${hits === 1 ? '' : 'es'}</span>` : ''}</div>
       <div class="o-legend"><span><i style="background:#fff8b8"></i>Vacant</span><span><i style="background:#d6efff"></i>Consultant</span><span><i style="background:#ffe1df"></i>Marked red in the organogram</span><span><i style="background:var(--brand-pale)"></i>Head of department</span></div>
-      ${crumb}${chart}`;
+      ${chart}`;
     const sc2 = $('.otree'); if (sc2 && keepScroll) { sc2.scrollLeft = keepScroll.x; sc2.scrollTop = keepScroll.y; }
 
-    const qEl = $('#hQ');
-    if (qEl) qEl.addEventListener('input', () => { f.q = qEl.value; const p = qEl.selectionStart; renderHierarchy(false).then(() => { const e = $('#hQ'); if (e) { e.focus(); try { e.setSelectionRange(p, p); } catch (_) {} } }); });
+    ['#hQ', '#hQ2'].forEach((sel) => {
+      const qEl = $(sel);
+      if (qEl) qEl.addEventListener('input', () => { f.q = qEl.value; const p = qEl.selectionStart; renderHierarchy(false).then(() => { const e = $(sel); if (e) { e.focus(); try { e.setSelectionRange(p, p); } catch (_) {} } }); });
+    });
+    // zoom + full screen (applied in place so the scroll position stays)
+    const applyZoom = () => { const ot = $('.ot'), box = $('.otree'); if (!ot || !box) return; ot.style.zoom = f.zoom; ot.style.minWidth = Math.max(0, (box.clientWidth - 24) / f.zoom) + 'px'; const z = $('#zVal'); if (z) z.textContent = Math.round(f.zoom * 100) + '%'; };
+    const fitNow = () => { const ot = $('.ot'), box = $('.otree'); if (!ot || !box) return; ot.style.zoom = 1; ot.style.minWidth = '0px'; const w = ot.scrollWidth, c = box.clientWidth - 24; f.zoom = Math.max(0.3, Math.min(1, Math.floor((c / w) * 100) / 100)); applyZoom(); box.scrollLeft = 0; };
+    if (f.autoFit) { f.autoFit = false; fitNow(); } else applyZoom();
+    if (f._rs) window.removeEventListener('resize', f._rs);
+    f._rs = () => { if (state.tab === 'hierarchy') applyZoom(); };
+    window.addEventListener('resize', f._rs);
+    const zb = (id, fn) => { const b = $('#' + id); if (b) b.addEventListener('click', fn); };
+    zb('zIn', () => { f.zoom = Math.min(1.5, Math.round((f.zoom + 0.1) * 10) / 10); applyZoom(); });
+    zb('zOut', () => { f.zoom = Math.max(0.3, Math.round((f.zoom - 0.1) * 10) / 10); applyZoom(); });
+    zb('zFit', fitNow);
+    zb('oFull', () => { f.full = !f.full; f.autoFit = true; renderHierarchy(false); });
+    if (f._esc) document.removeEventListener('keydown', f._esc);
+    f._esc = (e) => { if (e.key === 'Escape' && f.full && !document.querySelector('.modal-back')) { f.full = false; renderHierarchy(false); } };
+    document.addEventListener('keydown', f._esc);
     $$('[data-hs]').forEach((b) => b.addEventListener('click', () => { f.status = b.dataset.hs; renderHierarchy(false); }));
     $$('[data-focus]').forEach((b) => b.addEventListener('click', () => { f.focus = b.dataset.focus || null; renderHierarchy(false); }));
     $$('[data-tg]').forEach((b) => b.addEventListener('click', (e) => { e.stopPropagation(); const id = b.dataset.tg; f.open[id] = !isOpen(id, +b.dataset.depth); renderHierarchy(false); }));
-    $('#hExp').addEventListener('click', () => { roots.forEach((r) => descIds(r.id).forEach((i) => { f.open[i] = true; })); renderHierarchy(false); });
-    $('#hCol').addEventListener('click', () => { f.open = {}; renderHierarchy(false); });
+    $$('#hExp, .js-exp').forEach((b) => b.addEventListener('click', () => { roots.forEach((r) => descIds(r.id).forEach((i) => { f.open[i] = true; })); renderHierarchy(false); }));
+    $$('#hCol, .js-col').forEach((b) => b.addEventListener('click', () => { f.open = {}; renderHierarchy(false); }));
 
     // ---- job description (placeholder until the JDs are provided) ----
     const openJd = (x) => {
