@@ -473,3 +473,7 @@ span.tv-t { border: 0; background: transparent; cursor: default; }
 .ochart .otree, .ochart.full .otree { border: 0; background: transparent; border-radius: 0; padding-left: 0; padding-right: 0; }
 .ochart.full { background: var(--bg, var(--surface-2)); }
 .ochart:not(.full) .otree { height: auto; min-height: 0; max-height: none; overflow-y: hidden; }
+
+/* Urdu transcripts */
+.a[dir="auto"], .q[dir="auto"] { unicode-bidi: plaintext; }
+[lang="ur"] { font-family: "Noto Nastaliq Urdu", "Jameel Noori Nastaleeq", "Urdu Typesetting", "Segoe UI", Tahoma, serif; line-height: 2; }
