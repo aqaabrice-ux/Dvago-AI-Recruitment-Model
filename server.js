@@ -70,6 +70,8 @@ const ttsState = { disabledUntil: 0, reason: '' };
 // Urdu voice: Groq's Orpheus is English-only, so Urdu lines use the Microsoft Edge neural voice (ur-PK-UzmaNeural) via the optional
 // "msedge-tts" package. If the package or the internet route is unavailable the browser's own Urdu voice (or captions only) is used.
 let EdgeTTS = null;
+// msedge-tts expects the global Web Crypto API, which older Node versions (e.g. 18 on some hosts) do not define.
+if (!globalThis.crypto) { try { globalThis.crypto = require('crypto').webcrypto; } catch (e) { /* ignore */ } }
 try { EdgeTTS = require('msedge-tts'); } catch (e) { /* optional */ }
 const URDU_VOICE = process.env.TTS_VOICE_UR || 'ur-PK-UzmaNeural';
 const urduTtsState = { disabledUntil: 0 };
