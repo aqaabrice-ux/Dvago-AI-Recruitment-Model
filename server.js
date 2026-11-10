@@ -74,6 +74,37 @@ try { EdgeTTS = require('msedge-tts'); } catch (e) { /* optional */ }
 const URDU_VOICE = process.env.TTS_VOICE_UR || 'ur-PK-UzmaNeural';
 const urduTtsState = { disabledUntil: 0 };
 function urduTtsAvailable() { return TTS_ENABLED; }   // Edge neural voice first, Google voice as backup (no package needed)
+// Premium Urdu voices (optional, set one key in the environment). They are tried first; Edge, then Google are the free fallbacks.
+//   ElevenLabs: ELEVENLABS_API_KEY (+ ELEVENLABS_VOICE_ID, ELEVENLABS_MODEL default eleven_v3 - the model family that supports Urdu)
+//   Azure Speech: AZURE_SPEECH_KEY + AZURE_SPEECH_REGION (+ AZURE_SPEECH_VOICE default ur-PK-UzmaNeural)
+const ELEVEN_KEY = () => process.env.ELEVENLABS_API_KEY || '';
+const AZURE_KEY = () => process.env.AZURE_SPEECH_KEY || '';
+function urduEngines() { return [ELEVEN_KEY() && 'eleven', AZURE_KEY() && process.env.AZURE_SPEECH_REGION && 'azure', EdgeTTS && 'edge'].filter(Boolean); }
+async function fetchAudio(url, init, label) {
+  const ctl = new AbortController(); const timer = setTimeout(() => ctl.abort(), 20000);
+  try {
+    const r = await fetch(url, Object.assign({ signal: ctl.signal }, init));
+    if (!r.ok) throw new Error(label + ' ' + r.status + ' ' + (await r.text()).slice(0, 140));
+    const b = Buffer.from(await r.arrayBuffer());
+    if (b.length < 500) throw new Error(label + ' empty audio');
+    return b;
+  } finally { clearTimeout(timer); }
+}
+function synthUrduEleven(text) {
+  const voice = process.env.ELEVENLABS_VOICE_ID || '21m00Tcm4TlvDq8ikWAM';
+  return fetchAudio('https://api.elevenlabs.io/v1/text-to-speech/' + encodeURIComponent(voice) + '?output_format=mp3_44100_64', {
+    method: 'POST', headers: { 'xi-api-key': ELEVEN_KEY(), 'Content-Type': 'application/json', Accept: 'audio/mpeg' },
+    body: JSON.stringify({ text, model_id: process.env.ELEVENLABS_MODEL || 'eleven_v3' })
+  }, 'elevenlabs');
+}
+function synthUrduAzure(text) {
+  const voice = process.env.AZURE_SPEECH_VOICE || URDU_VOICE;
+  const esc = text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  const ssml = `<speak version="1.0" xmlns="http://www.w3.org/2001/10/synthesis" xml:lang="ur-PK"><voice name="${voice}"><prosody rate="-6%">${esc}</prosody></voice></speak>`;
+  return fetchAudio('https://' + process.env.AZURE_SPEECH_REGION + '.tts.speech.microsoft.com/cognitiveservices/v1', {
+    method: 'POST', headers: { 'Ocp-Apim-Subscription-Key': AZURE_KEY(), 'Content-Type': 'application/ssml+xml', 'X-Microsoft-OutputFormat': 'audio-24khz-48kbitrate-mono-mp3', 'User-Agent': 'dvago-recruiter' }, body: ssml
+  }, 'azure');
+}
 // Backup Urdu voice: Google Translate's public speech endpoint (needs no key; max ~200 characters per call).
 async function synthUrduGoogle(text) {
   const ctl = new AbortController(); const timer = setTimeout(() => ctl.abort(), 12000);
@@ -1088,7 +1119,7 @@ async function api(req, res, url) {
     }
     return send(res, 405, { error: 'Method not allowed' });
   }
-  if (r0 === 'health') return send(res, 200, { ok: true, app: 'dvago', version: '2.9', ttsUr: urduTtsAvailable(), translate: groqEnabled(), ai: aiEnabled(), model: aiEnabled() ? AI_MODEL : null, mail: mailer.isConfigured(), groq: groqEnabled(), groqModel: groqEnabled() ? GROQ_MODEL : null, tts: TTS_ENABLED && ((groqEnabled() && ttsState.disabledUntil < Date.now()) || (fs.existsSync(TTS_SEED) && fs.readdirSync(TTS_SEED).length > 0)) });
+  if (r0 === 'health') return send(res, 200, { ok: true, app: 'dvago', version: '2.9', ttsUr: urduTtsAvailable(), ttsUrEngine: urduEngines()[0] || 'google', translate: groqEnabled(), ai: aiEnabled(), model: aiEnabled() ? AI_MODEL : null, mail: mailer.isConfigured(), groq: groqEnabled(), groqModel: groqEnabled() ? GROQ_MODEL : null, tts: TTS_ENABLED && ((groqEnabled() && ttsState.disabledUntil < Date.now()) || (fs.existsSync(TTS_SEED) && fs.readdirSync(TTS_SEED).length > 0)) });
 
   // ---- SARAH follow-up (candidate-public endpoint, uses Groq) ----
   if (r0 === 'sarah-followup' && m === 'POST') {
@@ -1306,35 +1337,41 @@ async function api(req, res, url) {
     // Urdu line -> Edge neural voice (mp3), cached on disk like the English clips
     if (/^ur/i.test(String(b.lang || '')) || URDU_RE.test(text)) {
       if (!text || !urduTtsAvailable()) return send(res, 503, { error: 'tts-unavailable', reason: 'urdu-not-available' });
-      const ukey = crypto.createHash('sha1').update('edge|' + URDU_VOICE + '|' + text).digest('hex');
+      // Cache key follows the best configured engine, so clips made by a weaker fallback are never cached over a better voice.
+      const engines = urduEngines();
+      const top = engines[0] || 'google';
+      const ukey = crypto.createHash('sha1').update('ur2|' + top + '|' + (top === 'eleven' ? (process.env.ELEVENLABS_VOICE_ID || '') + (process.env.ELEVENLABS_MODEL || '') : URDU_VOICE) + '|' + text).digest('hex');
       const ufp = path.join(TTS_CACHE, ukey + '.mp3');
-      const sendMp3 = (buf) => { res.writeHead(200, Object.assign({ 'Content-Type': 'audio/mpeg', 'Content-Length': buf.length, 'Cache-Control': 'private, max-age=86400' }, SECURITY_HEADERS)); res.end(buf); };
-      if (fs.existsSync(ufp)) return sendMp3(fs.readFileSync(ufp));
+      const sendMp3 = (buf, eng) => { res.writeHead(200, Object.assign({ 'Content-Type': 'audio/mpeg', 'Content-Length': buf.length, 'Cache-Control': 'private, max-age=86400', 'X-TTS-Engine': eng || 'cache' }, SECURITY_HEADERS)); res.end(buf); };
+      if (fs.existsSync(ufp)) return sendMp3(fs.readFileSync(ufp), 'cache');
       const uip = req.socket.remoteAddress || '?';
       const unow = Date.now();
       const uh = ttsHits.get(uip) || { n: 0, t: unow };
       if (unow - uh.t > 60000) { uh.n = 0; uh.t = unow; }
       uh.n++; ttsHits.set(uip, uh);
       if (uh.n > 90) return send(res, 429, { error: 'too-many-requests' });
-      let ubuf = null, uerr = null, usedVoice = '';
-      if (EdgeTTS && urduTtsState.disabledUntil <= Date.now()) {
-        for (let attempt = 1; attempt <= 2 && !ubuf; attempt++) {   // the Edge service occasionally drops a stream: retry once
-          try { ubuf = await synthUrdu(text); usedVoice = 'edge'; } catch (e) { uerr = e; }
+      let ubuf = null, usedVoice = '';
+      for (const eng of engines) {
+        if ((urduTtsState.off || {})[eng] > Date.now()) continue;       // engine failed recently: skip it for a while
+        const tries = eng === 'edge' ? 3 : 1;   // the free Edge service drops many streams: retry
+        for (let attempt = 1; attempt <= tries && !ubuf; attempt++) {
+          try { ubuf = await (eng === 'eleven' ? synthUrduEleven(text) : eng === 'azure' ? synthUrduAzure(text) : synthUrdu(text)); usedVoice = eng; }
+          catch (e) {
+            console.warn('[tts-ur] ' + eng + ' failed:', e.message);
+            urduTtsState.fl = urduTtsState.fl || {}; urduTtsState.off = urduTtsState.off || {};
+            urduTtsState.fl[eng] = (urduTtsState.fl[eng] || 0) + 1;
+            if (/\b(401|402|403|429)\b/.test(e.message) || urduTtsState.fl[eng] >= 3) { urduTtsState.off[eng] = Date.now() + 5 * 60000; urduTtsState.fl[eng] = 0; console.warn('[tts-ur] ' + eng + ' paused for 5 min'); }
+          }
         }
-        if (ubuf) urduTtsState.fails = 0;
-        else {
-          urduTtsState.fails = (urduTtsState.fails || 0) + 1;
-          console.warn('[tts-ur] Edge voice failed:', uerr && uerr.message);
-          if (urduTtsState.fails >= 3) { urduTtsState.disabledUntil = Date.now() + 5 * 60000; urduTtsState.fails = 0; console.warn('[tts-ur] Edge voice failed 3x - using the Google Urdu voice for 5 min'); }
-        }
+        if (ubuf) { urduTtsState.fl = urduTtsState.fl || {}; urduTtsState.fl[eng] = 0; break; }
       }
       if (!ubuf) {
-        try { ubuf = await synthUrduGoogle(text); usedVoice = 'google'; } catch (e) { uerr = e; console.warn('[tts-ur] Google voice failed:', e.message); }
+        try { ubuf = await synthUrduGoogle(text); usedVoice = 'google'; } catch (e) { console.warn('[tts-ur] Google voice failed:', e.message); }
       }
       if (ubuf) {
-        try { fs.writeFileSync(ufp, ubuf); } catch (e) { /* cache is best-effort */ }
-        console.log('[tts-ur] OK via ' + usedVoice + ' (' + ubuf.length + ' bytes)');
-        return sendMp3(ubuf);
+        if (usedVoice === top) { try { fs.writeFileSync(ufp, ubuf); } catch (e) { /* cache is best-effort */ } }
+        console.log('[tts-ur] OK via ' + usedVoice + (usedVoice !== top ? ' (fallback; best engine is ' + top + ')' : '') + ' (' + ubuf.length + ' bytes)');
+        return sendMp3(ubuf, usedVoice);
       }
       return send(res, 503, { error: 'tts-unavailable', reason: 'urdu-error' });
     }
