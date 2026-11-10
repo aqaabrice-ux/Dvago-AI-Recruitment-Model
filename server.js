@@ -61,7 +61,7 @@ const GROQ_FALLBACKS = [
 const GROQ_URL = 'https://api.groq.com/openai/v1/chat/completions';
 // SARAH's neural voice: Groq-hosted Orpheus TTS (free tier). Voices: autumn, diana, hannah, austin, daniel, troy.
 const TTS_MODEL = process.env.TTS_MODEL || 'canopylabs/orpheus-v1-english';
-const TTS_VOICE = process.env.TTS_VOICE || 'hannah';
+const TTS_VOICE = process.env.TTS_VOICE || 'diana';   // SARAH's English voice (Railway variable TTS_VOICE overrides this)
 const TTS_URL = 'https://api.groq.com/openai/v1/audio/speech';
 const TTS_CACHE = path.join(DATA, 'tts-cache');
 const TTS_SEED = path.join(__dirname, 'tts-seed'); // optional read-only clips shipped with the code (served before calling Groq)
@@ -75,13 +75,12 @@ if (!globalThis.crypto) { try { globalThis.crypto = require('crypto').webcrypto;
 try { EdgeTTS = require('msedge-tts'); } catch (e) { /* optional */ }
 const URDU_VOICE = process.env.TTS_VOICE_UR || 'ur-PK-UzmaNeural';
 const urduTtsState = { disabledUntil: 0 };
+const urSticky = new Map();   // interview session id -> the Urdu voice engine it started with (so one interview never switches voices)
 function urduTtsAvailable() { return TTS_ENABLED; }   // Edge neural voice first, Google voice as backup (no package needed)
-// Premium Urdu voices (optional, set one key in the environment). They are tried first; Edge, then Google are the free fallbacks.
-//   ElevenLabs: ELEVENLABS_API_KEY (+ ELEVENLABS_VOICE_ID, ELEVENLABS_MODEL default eleven_v3 - the model family that supports Urdu)
-//   Azure Speech: AZURE_SPEECH_KEY + AZURE_SPEECH_REGION (+ AZURE_SPEECH_VOICE default ur-PK-UzmaNeural)
-const ELEVEN_KEY = () => process.env.ELEVENLABS_API_KEY || '';
+// Urdu voice engines, best first. The default is the free Edge neural voice (Uzma). If the company later gets an official Azure Speech key
+// (same Uzma voice, reliable) it is used automatically: AZURE_SPEECH_KEY + AZURE_SPEECH_REGION (+ AZURE_SPEECH_VOICE). Google is the last backup.
 const AZURE_KEY = () => process.env.AZURE_SPEECH_KEY || '';
-function urduEngines() { return [ELEVEN_KEY() && 'eleven', AZURE_KEY() && process.env.AZURE_SPEECH_REGION && 'azure', EdgeTTS && 'edge'].filter(Boolean); }
+function urduEngines() { return [AZURE_KEY() && process.env.AZURE_SPEECH_REGION && 'azure', EdgeTTS && 'edge'].filter(Boolean); }
 async function fetchAudio(url, init, label) {
   const ctl = new AbortController(); const timer = setTimeout(() => ctl.abort(), 20000);
   try {
@@ -91,13 +90,6 @@ async function fetchAudio(url, init, label) {
     if (b.length < 500) throw new Error(label + ' empty audio');
     return b;
   } finally { clearTimeout(timer); }
-}
-function synthUrduEleven(text) {
-  const voice = process.env.ELEVENLABS_VOICE_ID || '21m00Tcm4TlvDq8ikWAM';
-  return fetchAudio('https://api.elevenlabs.io/v1/text-to-speech/' + encodeURIComponent(voice) + '?output_format=mp3_44100_64', {
-    method: 'POST', headers: { 'xi-api-key': ELEVEN_KEY(), 'Content-Type': 'application/json', Accept: 'audio/mpeg' },
-    body: JSON.stringify({ text, model_id: process.env.ELEVENLABS_MODEL || 'eleven_v3' })
-  }, 'elevenlabs');
 }
 function synthUrduAzure(text) {
   const voice = process.env.AZURE_SPEECH_VOICE || URDU_VOICE;
@@ -109,14 +101,26 @@ function synthUrduAzure(text) {
 }
 // Backup Urdu voice: Google Translate's public speech endpoint (needs no key; max ~200 characters per call).
 async function synthUrduGoogle(text) {
-  const ctl = new AbortController(); const timer = setTimeout(() => ctl.abort(), 12000);
-  try {
-    const r = await fetch('https://translate.google.com/translate_tts?ie=UTF8&client=tw-ob&tl=ur&q=' + encodeURIComponent(text.slice(0, 200)), { headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120 Safari/537.36' }, signal: ctl.signal });
-    if (!r.ok) throw new Error('google tts ' + r.status);
-    const b = Buffer.from(await r.arrayBuffer());
-    if (b.length < 500) throw new Error('google tts empty');
-    return b;
-  } finally { clearTimeout(timer); }
+  const one = async (t) => {
+    const ctl = new AbortController(); const timer = setTimeout(() => ctl.abort(), 12000);
+    try {
+      const r = await fetch('https://translate.google.com/translate_tts?ie=UTF8&client=tw-ob&tl=ur&q=' + encodeURIComponent(t), { headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120 Safari/537.36' }, signal: ctl.signal });
+      if (!r.ok) throw new Error('google tts ' + r.status);
+      const b = Buffer.from(await r.arrayBuffer());
+      if (b.length < 500) throw new Error('google tts empty');
+      return b;
+    } finally { clearTimeout(timer); }
+  };
+  // the endpoint takes ~200 characters per call: split on sentence ends and join the mp3 parts
+  const parts = []; let cur = '';
+  for (const sent of (text.match(/[^.!?۔؟]+[.!?۔؟]*\s*/g) || [text])) {
+    let x = sent;
+    while (x.length > 190) { const cut = Math.max(x.lastIndexOf('،', 190), x.lastIndexOf(' ', 190), 60); if (cur) { parts.push(cur); cur = ''; } parts.push(x.slice(0, cut)); x = x.slice(cut); }
+    if ((cur + x).length > 190) { if (cur) parts.push(cur); cur = x; } else cur += x;
+  }
+  if (cur.trim()) parts.push(cur);
+  const bufs = []; for (const p of parts.filter((x) => x.trim())) bufs.push(await one(p.trim()));
+  return Buffer.concat(bufs);
 }
 function synthUrdu(text) {
   return new Promise((resolve, reject) => {
@@ -1335,44 +1339,49 @@ async function api(req, res, url) {
   }
   if (r0 === 'tts' && m === 'POST') {
     const b = await readBody(req);
-    const text = String(b.text || '').replace(/\s+/g, ' ').trim().slice(0, 240);
-    // Urdu line -> Edge neural voice (mp3), cached on disk like the English clips
+    const fullText = String(b.text || '').replace(/\s+/g, ' ').trim();
+    const text = fullText.slice(0, 240);
+    // Urdu line -> neural voice (mp3), cached on disk like the English clips
     if (/^ur/i.test(String(b.lang || '')) || URDU_RE.test(text)) {
       if (!text || !urduTtsAvailable()) return send(res, 503, { error: 'tts-unavailable', reason: 'urdu-not-available' });
-      // Cache key follows the best configured engine, so clips made by a weaker fallback are never cached over a better voice.
-      const engines = urduEngines();
-      const top = engines[0] || 'google';
-      const ukey = crypto.createHash('sha1').update('ur2|' + top + '|' + (top === 'eleven' ? (process.env.ELEVENLABS_VOICE_ID || '') + (process.env.ELEVENLABS_MODEL || '') : URDU_VOICE) + '|' + text).digest('hex');
-      const ufp = path.join(TTS_CACHE, ukey + '.mp3');
+      const utext = fullText.slice(0, 700);
+      const sid = String(b.sid || '').replace(/[^\w-]/g, '').slice(0, 60);
+      // One interview = one voice: the engine that served its first line is used for every later line (falling back only if it fails).
+      const all = urduEngines().concat('google');
+      const st = sid && urSticky.get(sid);
+      const order = st && all.includes(st.eng) ? [st.eng].concat(all.filter((e) => e !== st.eng)) : all;
+      const tagOf = (eng) => (eng === 'azure' ? (process.env.AZURE_SPEECH_VOICE || URDU_VOICE) : eng === 'edge' ? URDU_VOICE : 'g');
+      const fpOf = (eng) => path.join(TTS_CACHE, crypto.createHash('sha1').update('ur3|' + eng + '|' + tagOf(eng) + '|' + utext).digest('hex') + '.mp3');
       const sendMp3 = (buf, eng) => { res.writeHead(200, Object.assign({ 'Content-Type': 'audio/mpeg', 'Content-Length': buf.length, 'Cache-Control': 'private, max-age=86400', 'X-TTS-Engine': eng || 'cache' }, SECURITY_HEADERS)); res.end(buf); };
-      if (fs.existsSync(ufp)) return sendMp3(fs.readFileSync(ufp), 'cache');
       const uip = req.socket.remoteAddress || '?';
       const unow = Date.now();
       const uh = ttsHits.get(uip) || { n: 0, t: unow };
       if (unow - uh.t > 60000) { uh.n = 0; uh.t = unow; }
       uh.n++; ttsHits.set(uip, uh);
       if (uh.n > 90) return send(res, 429, { error: 'too-many-requests' });
-      let ubuf = null, usedVoice = '';
-      for (const eng of engines) {
+      let ubuf = null, usedVoice = '', fromCache = false;
+      for (const eng of order) {
+        const f = fpOf(eng);
+        if (fs.existsSync(f)) { ubuf = fs.readFileSync(f); usedVoice = eng; fromCache = true; break; }
         if ((urduTtsState.off || {})[eng] > Date.now()) continue;       // engine failed recently: skip it for a while
-        const tries = eng === 'edge' ? 3 : 1;   // the free Edge service drops many streams: retry
+        const isSticky = !!(st && st.eng === eng);
+        const tries = eng === 'edge' ? 7 : 1;   // the free Edge service drops many streams: retry (more when the interview is already using it - a short delay beats a voice change)
         for (let attempt = 1; attempt <= tries && !ubuf; attempt++) {
-          try { ubuf = await (eng === 'eleven' ? synthUrduEleven(text) : eng === 'azure' ? synthUrduAzure(text) : synthUrdu(text)); usedVoice = eng; }
+          if (attempt > 1) await new Promise((r) => setTimeout(r, 250));
+          try { ubuf = await (eng === 'azure' ? synthUrduAzure(utext) : eng === 'edge' ? synthUrdu(utext) : synthUrduGoogle(utext)); usedVoice = eng; }
           catch (e) {
             console.warn('[tts-ur] ' + eng + ' failed:', e.message);
             urduTtsState.fl = urduTtsState.fl || {}; urduTtsState.off = urduTtsState.off || {};
             urduTtsState.fl[eng] = (urduTtsState.fl[eng] || 0) + 1;
-            if (/\b(401|402|403|429)\b/.test(e.message) || urduTtsState.fl[eng] >= 3) { urduTtsState.off[eng] = Date.now() + 5 * 60000; urduTtsState.fl[eng] = 0; console.warn('[tts-ur] ' + eng + ' paused for 5 min'); }
+            if (/\b(401|402|403|429)\b/.test(e.message) || (urduTtsState.fl[eng] >= (eng === 'edge' ? 9 : 3) && !(isSticky && eng !== 'edge'))) { urduTtsState.off[eng] = Date.now() + 5 * 60000; urduTtsState.fl[eng] = 0; console.warn('[tts-ur] ' + eng + ' paused for 5 min'); }
           }
         }
-        if (ubuf) { urduTtsState.fl = urduTtsState.fl || {}; urduTtsState.fl[eng] = 0; break; }
-      }
-      if (!ubuf) {
-        try { ubuf = await synthUrduGoogle(text); usedVoice = 'google'; } catch (e) { console.warn('[tts-ur] Google voice failed:', e.message); }
+        if (ubuf) { urduTtsState.fl = urduTtsState.fl || {}; urduTtsState.fl[eng] = 0; try { fs.writeFileSync(fpOf(eng), ubuf); } catch (e) { /* cache is best-effort */ } break; }
       }
       if (ubuf) {
-        if (usedVoice === top) { try { fs.writeFileSync(ufp, ubuf); } catch (e) { /* cache is best-effort */ } }
-        console.log('[tts-ur] OK via ' + usedVoice + (usedVoice !== top ? ' (fallback; best engine is ' + top + ')' : '') + ' (' + ubuf.length + ' bytes)');
+        // the first engine stays the interview's voice; a one-off fallback line does not switch the rest
+        if (sid) { if (!st) urSticky.set(sid, { eng: usedVoice, t: unow }); else st.t = unow; if (urSticky.size > 3000) for (const [k, v] of urSticky) if (unow - v.t > 3 * 3600000) urSticky.delete(k); }
+        console.log('[tts-ur] OK via ' + usedVoice + (fromCache ? ' (cache)' : '') + (usedVoice !== all[0] ? ' (not the best engine: ' + all[0] + ')' : '') + ' (' + ubuf.length + ' bytes)');
         return sendMp3(ubuf, usedVoice);
       }
       return send(res, 503, { error: 'tts-unavailable', reason: 'urdu-error' });
