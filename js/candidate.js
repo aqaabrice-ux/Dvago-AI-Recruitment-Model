@@ -21,7 +21,7 @@
   const ADAPTIVE_BACKUP = ['Tell me about a challenge you faced in your most recent role and how you handled it.', 'Which part of this position do you feel most confident about, and which part would you want support to learn?'];
   const GAME_SECONDS = 40;
   // Urdu interview mode: SARAH shows + speaks Urdu. Questions are translated by the server (Groq); these fixed lines are pre-written.
-  const ACKS_UR = ['شکریہ، یہ بہت مددگار ہے۔', 'بہت اچھا، بتانے کا شکریہ۔', 'واہ، آپ نے اچھی تفصیل دی، شکریہ۔', 'شکریہ، اس سے مجھے اچھی طرح اندازہ ہو گیا۔'];
+  const ACKS_UR = ['تھینک یو، یہ بہت ہیلپفل ہے۔', 'گریٹ، شیئر کرنے کا شکریہ۔', 'زبردست، آپ نے اچھی ڈیٹیل دی۔', 'تھینک یو، اس سے مجھے کلیئر آئیڈیا مل گیا۔'];
   const isUrdu = (t) => { const s = String(t || ''); const L = (s.match(/\p{L}/gu) || []).length; return L > 0 && (s.match(/[؀-ۿ]/g) || []).length / L > 0.4; };
 
   const CITIES = ['Karachi', 'Lahore', 'Multan', 'Hyderabad', 'Bahawalpur', 'Sahiwal', 'Kasur', 'Burewala', 'Vehari', 'Khanewal'];
@@ -1157,7 +1157,7 @@
     });
     $('#spkBtn').addEventListener('click', async () => {
       $('#spkTxt').textContent = 'Playing…';
-      if (S.voiceLang === 'ur-PK') await Voice.speak('السلام علیکم! کیا آپ مجھے صاف سنائی دے رہی ہوں؟ بہت اچھا، چلیے آگے بڑھتے ہیں۔', { lang: 'ur-PK' });
+      if (S.voiceLang === 'ur-PK') await Voice.speak('ہیلو! کیا آپ مجھے کلیئرلی سن سکتے ہیں؟ گریٹ، چلیں آگے بڑھتے ہیں۔', { lang: 'ur-PK' });
       else await Voice.speak('Hello! Can you hear me clearly? Great, let\'s continue.');
       $('#spkTxt').innerHTML = `<span style="color:var(--g-300)">Played. If you heard SARAH, your speakers are fine.</span>`;
     });
@@ -1594,14 +1594,14 @@
       }
       V.part = 'adaptive'; V.adIdx = idx;
       progress();
-      const lead = [prefix, idx === 0 ? (UR && !V.urFailed ? 'اب آپ کے پس منظر کے بارے میں مجھے دو مختصر سوال پوچھنے ہیں۔' : 'I have two quick questions about your background.') : ''].filter(Boolean).join(' ');
+      const lead = [prefix, idx === 0 ? (UR && !V.urFailed ? 'اب آپ کے بیک گراؤنڈ کے بارے میں مجھے دو کوئیک سوال پوچھنے ہیں۔' : 'I have two quick questions about your background.') : ''].filter(Boolean).join(' ');
       ask(S.adaptive[idx].q, lead);
     }
 
     async function finish(ack) {
       setPhase('speaking');
       const m = addMsg('SARAH', '');
-      await say(UR && !V.urFailed ? `${ack ? ack + ' ' : ''}آپ کا بہت شکریہ! ہماری گفتگو مکمل ہو گئی۔ اب میں آپ کو اسسمنٹ کے بارے میں بتاؤں گی۔` : `${ack ? ack + ' ' : ''}Thank you${first() ? ' ' + first() : ''}! That's our conversation done. Next, I'll explain your assessment.`, V.orb, m.querySelector('.bubble-text'));
+      await say(UR && !V.urFailed ? `${ack ? ack + ' ' : ''}تھینک یو! ہماری بات چیت مکمل ہو گئی۔ اب میں آپ کو اسسمنٹ کے بارے میں بتاتی ہوں۔` : `${ack ? ack + ' ' : ''}Thank you${first() ? ' ' + first() : ''}! That's our conversation done. Next, I'll explain your assessment.`, V.orb, m.querySelector('.bubble-text'));
       if (V.alive) setTimeout(() => go('brief'), 600);
     }
 
@@ -1613,7 +1613,7 @@
       if (!V.alive) return;
       if (S.voiceIdx >= qs.length) return adaptiveStep('');
       const ur = UR && !V.urFailed;
-      begin(S.voiceIdx === 0 ? (ur ? 'آئیے شروع کرتے ہیں، اور بالکل پرسکون رہیے۔' : `Let's begin, ${first() || 'and relax'}.`) : '');
+      begin(S.voiceIdx === 0 ? (ur ? 'چلیں شروع کرتے ہیں، اور بالکل ریلیکس رہیں۔' : `Let's begin, ${first() || 'and relax'}.`) : '');
     };
     if (UR) {
       setPhase('speaking');
