@@ -67,6 +67,29 @@ const TTS_CACHE = path.join(DATA, 'tts-cache');
 const TTS_SEED = path.join(__dirname, 'tts-seed'); // optional read-only clips shipped with the code (served before calling Groq)
 const TTS_ENABLED = String(process.env.TTS_ENABLED || 'true').toLowerCase() !== 'false'; // set TTS_ENABLED=false to use the browser voice only
 const ttsState = { disabledUntil: 0, reason: '' };
+// Urdu voice: Groq's Orpheus is English-only, so Urdu lines use the Microsoft Edge neural voice (ur-PK-UzmaNeural) via the optional
+// "msedge-tts" package. If the package or the internet route is unavailable the browser's own Urdu voice (or captions only) is used.
+let EdgeTTS = null;
+try { EdgeTTS = require('msedge-tts'); } catch (e) { /* optional */ }
+const URDU_VOICE = process.env.TTS_VOICE_UR || 'ur-PK-UzmaNeural';
+const urduTtsState = { disabledUntil: 0 };
+function urduTtsAvailable() { return !!EdgeTTS && TTS_ENABLED; }
+function synthUrdu(text) {
+  return new Promise((resolve, reject) => {
+    let done = false;
+    const fail = (e) => { if (!done) { done = true; reject(e instanceof Error ? e : new Error(String(e))); } };
+    const timer = setTimeout(() => fail(new Error('timeout')), 15000);
+    (async () => {
+      const tts = new EdgeTTS.MsEdgeTTS();
+      await tts.setMetadata(URDU_VOICE, EdgeTTS.OUTPUT_FORMAT.AUDIO_24KHZ_48KBITRATE_MONO_MP3);
+      const { audioStream } = tts.toStream(text);
+      const chunks = [];
+      audioStream.on('data', (c) => chunks.push(c));
+      audioStream.on('error', fail);
+      audioStream.on('end', () => { clearTimeout(timer); if (done) return; done = true; const b = Buffer.concat(chunks); b.length > 500 ? resolve(b) : reject(new Error('empty audio')); });
+    })().catch(fail);
+  });
+}
 const ttsHits = new Map(); // ip -> { n, t } simple per-minute limiter
 const GROQ_MODELS_URL = 'https://api.groq.com/openai/v1/models';
 const MAX_BODY = 60 * 1024 * 1024;
@@ -528,6 +551,7 @@ const groqDeadModels = new Set();
 const resumeHits = new Map();
 const sttHits = new Map();
 const adaptiveHits = new Map();
+const trHits = new Map();
 let groqWorkingModel = null;
 let groqAvailableModels = null;
 
@@ -607,6 +631,33 @@ async function groqChat(messages, opts) {
     }
   }
   throw lastErr || new Error('all Groq models unavailable');
+}
+
+// ---- English -> Urdu translation for SARAH's lines (interview questions are written in English; Urdu mode shows + speaks the Urdu) ----
+const URDU_RE = /[؀-ۿ]/;
+const trCache = new Map();           // english text -> urdu
+const trFile = path.join(DATA, 'translate-ur.json');
+try { Object.entries(JSON.parse(fs.readFileSync(trFile, 'utf8'))).forEach(([k, v]) => trCache.set(k, v)); } catch (e) { /* first run */ }
+let trSaveTimer = null;
+function trSaveSoon() { clearTimeout(trSaveTimer); trSaveTimer = setTimeout(() => { try { fs.writeFileSync(trFile, JSON.stringify(Object.fromEntries(trCache))); } catch (e) {} }, 2000); }
+async function translateToUrdu(texts) {
+  const src = texts.map((t) => String(t || '').replace(/\s+/g, ' ').trim().slice(0, 400));
+  const need = [...new Set(src.filter((t) => t && !trCache.has(t)))];
+  if (need.length) {
+    const sys = `You translate lines spoken by SARAH, a warm, professional recruiter at DVAGO (a pharmacy & wellness retail chain in Pakistan), into natural spoken Urdu for a job interview.
+Rules:
+- Write in Urdu script only, in everyday polite spoken Urdu (use "آپ"), the way an educated Pakistani HR professional would speak. Not stiff, not Hindi-flavoured.
+- Transliterate English loanwords into Urdu script (کسٹمر، پرسکرپشن، سٹاک). Write DVAGO as ڈیواگو and SARAH as سارہ. Keep numbers as digits.
+- Keep the meaning and the question form exactly; do not add or remove information. Questions end with "؟", statements with "۔".
+Output STRICT JSON only: {"t":["<urdu for line 1>","<urdu for line 2>", ...]} with exactly ${need.length} items in the same order.`;
+    const out = await groqChat([{ role: 'system', content: sys }, { role: 'user', content: JSON.stringify(need) }], { temperature: 0.2, maxTokens: 3000 });
+    const j = parseGroqJSON(out.text);
+    const arr = j && Array.isArray(j.t) ? j.t : null;
+    if (!arr || arr.length !== need.length) throw new Error('translation shape mismatch');
+    need.forEach((t, i) => { const u = String(arr[i] || '').replace(/\s+/g, ' ').trim(); if (u.length > 1 && URDU_RE.test(u)) trCache.set(t, u); });
+    trSaveSoon();
+  }
+  return src.map((t) => trCache.get(t) || '');
 }
 
 // AI resume check: extracts profile fields and judges fit against the chosen position. Returns validated plain data.
@@ -752,7 +803,7 @@ const applyHits = new Map();
 // Adaptive deep-dive question: SARAH reads the resume, the JD and the answers so far and asks ONE targeted question.
 // Never scored (core questions stay identical for everyone, so candidates remain comparable).
 const BANNED_TOPICS = /\b(age|how old|date of birth|birth ?day|married|marital|single|husband|wife|spouse|pregnan\w*|children|kids|baby|religio\w*|muslim|christian|hindu|sect|caste|ethnic\w*|race|gender|sex|political|party|vote|disab\w*|illness|health condition|medical condition|salary history|nationality|cnic|passport|appearance|weight|height)\b/i;
-async function groqAdaptiveQuestion({ roleTitle, positionTitle, jd, resumeText, turns, asked }) {
+async function groqAdaptiveQuestion({ roleTitle, positionTitle, jd, resumeText, turns, asked, lang }) {
   const safeResume = String(resumeText || '').replace(/\b\d{5}-?\d{7}-?\d\b/g, '[ID removed]').slice(0, 4000);
   const transcript = (turns || []).slice(-8).map((t, i) => `Q${i + 1}: ${String(t.q || '').slice(0, 200)}\nA${i + 1}: ${String(t.a || '').slice(0, 600) || '(no answer)'}`).join('\n\n');
   const sys = `You are SARAH, a warm, professional AI recruiter for DVAGO (pharmacy & wellness retail, Pakistan), in a live voice interview.
@@ -777,11 +828,14 @@ Output STRICT JSON only: {"q":"<the question>","why":"<one short sentence for th
     const why = typeof j.why === 'string' ? j.why.replace(/\s+/g, ' ').trim().slice(0, 200) : '';
     if (q.length < 12 || q.length > 220 || !/\?\s*$/.test(q) || BANNED_TOPICS.test(q)) { note = '\n\n(Previous attempt was rejected. Write a different, clean work-related question.)'; continue; }
     if (allPrev.some((p) => tooSimilar(q, p))) { note = '\n\n(Previous attempt was too similar to an earlier question. Choose a clearly DIFFERENT topic from the resume or job description.)'; continue; }
+    if (lang === 'ur') {
+      try { const [uq] = await translateToUrdu([q]); if (uq) return { q: uq, qEn: q, why }; } catch (e) { console.warn('[groq] adaptive translate failed:', e.message); }
+    }
     return { q, why };
   }
   throw new Error('no acceptable question after retries');
 }
-async function groqFollowUp({ roleTitle, questionText, answerText, rubric, rubricCovered, budget, totalBudget, elapsedSec, clarifyAllowed, isFollowUp }) {
+async function groqFollowUp({ roleTitle, questionText, answerText, rubric, rubricCovered, budget, totalBudget, elapsedSec, clarifyAllowed, isFollowUp, lang }) {
   if (!groqEnabled()) throw Object.assign(new Error('Groq not configured'), { status: 400 });
   const sys = `You are SARAH, a friendly human-sounding AI recruiter for DVAGO (a pharmacy & wellness retail chain in Pakistan). You are having a real voice conversation with a candidate, not reading a script.
 You will see the candidate's latest answer and decide ONE of three things:
@@ -799,7 +853,8 @@ Rules:
 - If the candidate declines or cannot answer ("I can't tell you", "I don't know", "pass", "pata nahi"), use "next" and make ack kind and reassuring, e.g. "That's completely okay, no pressure at all. Let's move on."
 - A single word or tiny fragment (like "medicine") is NOT a real answer. If follow-up budget remains, use "followup" and ask them warmly to explain, mentioning their word where it helps, e.g. "You mentioned medicine. Could you tell me a bit more about that?"
 - If follow-up budget is 0, you MUST use "next" (never "followup").
-- "followup" must be specific, warm, conversational, English only. Never repeat the main question verbatim. Never ask more than one question.
+- "followup" must be specific, warm, conversational, ${lang === 'ur' ? 'in Urdu' : 'English only'}. Never repeat the main question verbatim. Never ask more than one question.
+${lang === 'ur' ? `- URDU MODE: the candidate is being interviewed in Urdu (their answer may be Urdu, Roman Urdu or mixed with English). Write EVERY spoken string ("ack" and "q") in natural, polite, everyday spoken Urdu in Urdu script (use "آپ"), as an educated Pakistani HR professional would. Transliterate English loanwords into Urdu script. Keep the JSON keys and "action" values in English exactly as specified. React to what the candidate actually said.` : ''}
 - "clarify" only for clearly unreadable input: "g g g g", "asdfasdf", keyboard mashing, abusive words. A short but real word is NOT gibberish.
 ${isFollowUp ? '- The text you are judging is the candidate\'s reply to YOUR follow-up. Do not ask another follow-up; use "next" with a natural ack.' : ''}`;
   const user = `Role: ${roleTitle}
@@ -878,7 +933,7 @@ ${rq.caseStudy.title} — ${rq.caseStudy.context}
 
 ${caseBlock}
 
-Voice interview transcript (speech-to-text, may contain recognition errors; answers may be in English or Urdu):
+Voice interview transcript (speech-to-text, may contain recognition errors; answers may be in English or Urdu — if the candidate chose an Urdu interview, SARAH's questions and the answers are in Urdu: judge the content by meaning, exactly as you would for English, and write your own feedback in English):
 ${voiceBlock}
 
 Resume text (may be empty):
@@ -985,7 +1040,7 @@ async function api(req, res, url) {
     }
     return send(res, 405, { error: 'Method not allowed' });
   }
-  if (r0 === 'health') return send(res, 200, { ok: true, app: 'dvago', version: '2.8', ai: aiEnabled(), model: aiEnabled() ? AI_MODEL : null, mail: mailer.isConfigured(), groq: groqEnabled(), groqModel: groqEnabled() ? GROQ_MODEL : null, tts: TTS_ENABLED && ((groqEnabled() && ttsState.disabledUntil < Date.now()) || (fs.existsSync(TTS_SEED) && fs.readdirSync(TTS_SEED).length > 0)) });
+  if (r0 === 'health') return send(res, 200, { ok: true, app: 'dvago', version: '2.9', ttsUr: urduTtsAvailable(), translate: groqEnabled(), ai: aiEnabled(), model: aiEnabled() ? AI_MODEL : null, mail: mailer.isConfigured(), groq: groqEnabled(), groqModel: groqEnabled() ? GROQ_MODEL : null, tts: TTS_ENABLED && ((groqEnabled() && ttsState.disabledUntil < Date.now()) || (fs.existsSync(TTS_SEED) && fs.readdirSync(TTS_SEED).length > 0)) });
 
   // ---- SARAH follow-up (candidate-public endpoint, uses Groq) ----
   if (r0 === 'sarah-followup' && m === 'POST') {
@@ -995,10 +1050,11 @@ async function api(req, res, url) {
     const answerText = (b.answerText || '').trim();
     const wc = answerText.split(/\s+/).filter(Boolean).length;
     const alreadyClarified = Number(b.alreadyClarified) || 0;
+    const UR = /^ur/i.test(String(b.lang || '')) || URDU_RE.test(answerText);   // Urdu interview (or an Urdu-script answer)
 
     // Server-side gibberish detection — simple, fast, catches obvious nonsense before calling Groq
     function looksLikeGibberish(t) {
-      if (!t || t.length < 3) return true;
+      if (!t || t.length < (UR ? 2 : 3)) return true;
       const cleaned = t.toLowerCase().replace(/[^\p{L}\p{N}\s]/gu, '');
       const words = cleaned.split(/\s+/).filter(Boolean);
       if (!words.length) return true;
@@ -1006,10 +1062,10 @@ async function api(req, res, url) {
       if (words.every((w) => w.length === 1)) return true;
       // Fewer than 3 unique characters total (e.g. "aaaaa", "gggggg")
       const uniq = new Set(cleaned.replace(/\s/g, ''));
-      if (uniq.size < 3) return true;
+      if (uniq.size < (UR ? 2 : 3)) return true;
       // No common English stop-words at all (likely nonsense in English context)
       const stop = /\b(i|the|and|a|to|is|was|have|had|do|it|my|me|we|you|at|in|on|for|with|that|this|but|or|so|an|be|can|will|would|should|could|just|like|get|got|work|job|year|day|time|good|know|think|about|really|well|here|there|how|what|when|where|why|who|which|then|than|from|been|has|he|she|they|us|our|your|their|his|her|its|am|yes|no|not|also|some|very|more)\b/i;
-      if (wc >= 4 && !stop.test(t)) return true;
+      if (wc >= 4 && !UR && !stop.test(t)) return true;   // the English stop-word test does not apply to Urdu / Roman-Urdu answers
       // Mostly repeated character pattern (e.g. "abcabcabc")
       if (cleaned.length > 10 && (new Set(cleaned.replace(/\s/g, '').match(/.{1,3}/g) || []).size < 3)) return true;
       return false;
@@ -1018,13 +1074,21 @@ async function api(req, res, url) {
 
     // Candidate politely refuses / has nothing to say ("I can't tell you", "I don't know", "pata nahi"...)
     const DECLINE_RE = /\b(i\s*(can'?t|cannot|won'?t|will\s*not|do\s*not\s*want\s*to|don'?t\s*want\s*to|dont\s*want\s*to)\s+(tell|say|answer|share|talk|discuss|speak)|i\s*(don'?t|do\s*not|dont)\s*know|no\s*comment|rather\s*not|prefer\s*not|not\s*comfortable|nothing\s*to\s*say|no\s*idea|pass|skip(\s*(this|it))?|pata\s*(nahi|nhi)|(nahi|nhi)\s*(bata|pata)|mujhe\s*(nahi|nhi)\s*pata)\b/i;
-    const declined = wc > 0 && wc <= 10 && DECLINE_RE.test(answerText);
-    const DECLINE_ACKS = [
+    const DECLINE_UR_RE = /(معلوم\s*نہیں|پتہ?\s*نہیں|پتا\s*نہیں|نہیں\s*بتا|نہیں\s*جانتا|نہیں\s*جانتی|جواب\s*نہیں|کوئی\s*جواب\s*نہیں|چھوڑ\s*دی|آگے\s*چلی)/;
+    const declined = wc > 0 && wc <= 10 && (DECLINE_RE.test(answerText) || DECLINE_UR_RE.test(answerText));
+    const DECLINE_ACKS = UR ? [
+      'کوئی بات نہیں، بالکل پریشان نہ ہوں۔ چلیے اگلے سوال کی طرف چلتے ہیں۔',
+      'ٹھیک ہے، اگر آپ اس کا جواب نہیں دینا چاہتے تو کوئی مسئلہ نہیں۔ آگے بڑھتے ہیں۔',
+      'جی ٹھیک ہے، ایمانداری سے بتانے کا شکریہ۔ اگلا سوال دیکھتے ہیں۔'
+    ] : [
       "That's completely okay, no pressure at all. Let's move on to the next question.",
       "No problem at all, it's fine if you'd rather not answer that. Let's move on.",
       "That's alright, thanks for being honest. Let's go to the next one."
     ];
-    const FALLBACK_FOLLOWUPS = [
+    const FALLBACK_FOLLOWUPS = UR ? [
+      'کیا آپ اس بارے میں تھوڑا مزید بتا سکتے ہیں؟',
+      'کیا آپ کوئی مثال دے کر ذرا تفصیل سے بتا سکتے ہیں؟'
+    ] : [
       'Could you tell me a little more about that?',
       'Can you give me a bit more detail, maybe an example?'
     ];
@@ -1038,7 +1102,7 @@ async function api(req, res, url) {
     }
     // Gibberish → polite clarification, doesn't consume follow-up budget (if candidate hasn't already been clarified-once)
     if (gibberish && alreadyClarified < 1 && !b.isFollowUp) {
-      return send(res, 200, { action: 'clarify', q: "I'm sorry, I didn't quite catch that. Could you take a moment and share your answer again?", reason: 'gibberish-local' });
+      return send(res, 200, { action: 'clarify', q: UR ? 'معذرت، مجھے آپ کی بات ٹھیک سے سمجھ نہیں آئی۔ کیا آپ اپنا جواب دوبارہ دے سکتے ہیں؟' : "I'm sorry, I didn't quite catch that. Could you take a moment and share your answer again?", reason: 'gibberish-local' });
     }
     if (gibberish) {
       // Already clarified once (or this is the reply to a follow-up) and still gibberish -> move on gracefully
@@ -1065,7 +1129,8 @@ async function api(req, res, url) {
         totalBudget: totalBudget,
         elapsedSec: Number(b.elapsedSec) || 0,
         clarifyAllowed: alreadyClarified < 1 && !b.isFollowUp,
-        isFollowUp: !!b.isFollowUp
+        isFollowUp: !!b.isFollowUp,
+        lang: UR ? 'ur' : 'en'
       });
       // Safety net: AI said "move on" to a 1-4 word answer while we still have budget -> push once for more
       if (canAsk && wc < 5 && r.action === 'next') return send(res, 200, localFollowUp());
@@ -1112,7 +1177,8 @@ async function api(req, res, url) {
       const r = await groqAdaptiveQuestion({
         roleTitle: String(b.roleTitle || '').slice(0, 80), positionTitle: String(b.positionTitle || '').slice(0, 100),
         jd: String(b.jd || ''), resumeText: String(b.resumeText || ''),
-        turns: Array.isArray(b.turns) ? b.turns.slice(0, 12) : [], asked: Array.isArray(b.asked) ? b.asked.slice(0, 4).map((x) => String(x).slice(0, 220)) : []
+        turns: Array.isArray(b.turns) ? b.turns.slice(0, 12) : [], asked: Array.isArray(b.asked) ? b.asked.slice(0, 4).map((x) => String(x).slice(0, 220)) : [],
+        lang: /^ur/i.test(String(b.lang || '')) ? 'ur' : 'en'
       });
       console.log('[groq] adaptive question OK');
       return send(res, 200, Object.assign({ ok: true }, r));
@@ -1139,7 +1205,9 @@ async function api(req, res, url) {
     if (buf.length < 2000 || buf.length > 20 * 1024 * 1024) return send(res, 200, { ok: false, reason: 'bad-size' });
     const mime = mk[1];
     const ext = /mp4|m4a|aac/i.test(mime) ? 'mp4' : /ogg/i.test(mime) ? 'ogg' : /wav/i.test(mime) ? 'wav' : 'webm';
-    const lang = /^en/i.test(String(b.lang || '')) ? 'en' : '';   // English forced; Urdu / mixed speech is auto-detected
+    // English / Urdu are forced when the candidate chose one: auto-detect often mistakes Urdu for Hindi (Devanagari) or Arabic.
+    const wantUr = /^ur/i.test(String(b.lang || ''));
+    const lang = /^en/i.test(String(b.lang || '')) ? 'en' : wantUr ? 'ur' : '';
     const models = [process.env.WHISPER_MODEL, 'whisper-large-v3-turbo', 'whisper-large-v3'].filter((x, i, a) => x && a.indexOf(x) === i);
     for (const model of models) {
       try {
@@ -1149,7 +1217,9 @@ async function api(req, res, url) {
         fd.append('response_format', 'json');
         fd.append('temperature', '0');
         if (lang) fd.append('language', lang);
-        fd.append('prompt', 'Job interview for a pharmacy and retail company in Pakistan (DVAGO). The candidate may speak English, Urdu or Roman Urdu.');
+        fd.append('prompt', wantUr
+          ? 'یہ ڈیواگو (فارمیسی اور ریٹیل کمپنی، پاکستان) کا جاب انٹرویو ہے۔ امیدوار اردو میں بات کر رہا ہے، کبھی کبھی انگریزی الفاظ بھی استعمال کرتا ہے۔'
+          : 'Job interview for a pharmacy and retail company in Pakistan (DVAGO). The candidate may speak English, Urdu or Roman Urdu.');
         const r = await fetch('https://api.groq.com/openai/v1/audio/transcriptions', { method: 'POST', headers: { Authorization: 'Bearer ' + process.env.GROQ_API_KEY }, body: fd });
         if (r.status === 404 || r.status === 400) { console.warn('[stt] model unavailable:', model, r.status); continue; }
         if (!r.ok) { console.warn('[stt] Groq', r.status); return send(res, 200, { ok: false, reason: r.status === 429 ? 'rate-limited' : 'ai-error' }); }
@@ -1162,9 +1232,56 @@ async function api(req, res, url) {
     return send(res, 200, { ok: false, reason: 'no-model' });
   }
   // ---- SARAH neural voice (candidate-public). Text -> WAV via Groq Orpheus, cached on disk so repeats are instant/free ----
+  // ---- English -> Urdu translation of SARAH's interview lines (candidate-public, cached) ----
+  if (r0 === 'translate' && m === 'POST') {
+    if (!groqEnabled()) return send(res, 200, { ok: false, reason: 'ai-not-configured' });
+    const ip = req.socket.remoteAddress || '?';
+    const now = Date.now();
+    const h = trHits.get(ip) || { n: 0, t: now };
+    if (now - h.t > 60000) { h.n = 0; h.t = now; }
+    h.n++; trHits.set(ip, h);
+    if (h.n > 20) return send(res, 200, { ok: false, reason: 'rate-limited' });
+    const b = await readBody(req);
+    const texts = (Array.isArray(b.texts) ? b.texts : []).slice(0, 12).map((x) => String(x || ''));
+    if (!texts.length) return send(res, 200, { ok: false, reason: 'empty' });
+    try {
+      const out = await translateToUrdu(texts);
+      return send(res, 200, { ok: out.every(Boolean), texts: out });
+    } catch (e) {
+      console.warn('[translate] failed:', e.message);
+      return send(res, 200, { ok: false, reason: 'ai-error' });
+    }
+  }
   if (r0 === 'tts' && m === 'POST') {
     const b = await readBody(req);
-    const text = String(b.text || '').replace(/\s+/g, ' ').trim().slice(0, 200);
+    const text = String(b.text || '').replace(/\s+/g, ' ').trim().slice(0, 240);
+    // Urdu line -> Edge neural voice (mp3), cached on disk like the English clips
+    if (/^ur/i.test(String(b.lang || '')) || URDU_RE.test(text)) {
+      if (!text || !urduTtsAvailable() || urduTtsState.disabledUntil > Date.now()) return send(res, 503, { error: 'tts-unavailable', reason: 'urdu-not-available' });
+      const ukey = crypto.createHash('sha1').update('edge|' + URDU_VOICE + '|' + text).digest('hex');
+      const ufp = path.join(TTS_CACHE, ukey + '.mp3');
+      const sendMp3 = (buf) => { res.writeHead(200, Object.assign({ 'Content-Type': 'audio/mpeg', 'Content-Length': buf.length, 'Cache-Control': 'private, max-age=86400' }, SECURITY_HEADERS)); res.end(buf); };
+      if (fs.existsSync(ufp)) return sendMp3(fs.readFileSync(ufp));
+      const uip = req.socket.remoteAddress || '?';
+      const unow = Date.now();
+      const uh = ttsHits.get(uip) || { n: 0, t: unow };
+      if (unow - uh.t > 60000) { uh.n = 0; uh.t = unow; }
+      uh.n++; ttsHits.set(uip, uh);
+      if (uh.n > 90) return send(res, 429, { error: 'too-many-requests' });
+      let ubuf = null, uerr = null;
+      for (let attempt = 1; attempt <= 3 && !ubuf; attempt++) {   // the Edge service occasionally drops a stream: retry before giving up
+        try { ubuf = await synthUrdu(text); } catch (e) { uerr = e; }
+      }
+      if (ubuf) {
+        urduTtsState.fails = 0;
+        try { fs.writeFileSync(ufp, ubuf); } catch (e) { /* cache is best-effort */ }
+        return sendMp3(ubuf);
+      }
+      urduTtsState.fails = (urduTtsState.fails || 0) + 1;
+      console.warn('[tts-ur] failed:', uerr && uerr.message);
+      if (urduTtsState.fails >= 3) { urduTtsState.disabledUntil = Date.now() + 60000; urduTtsState.fails = 0; console.warn('[tts-ur] 3 failures in a row - using the browser voice for 60s'); }
+      return send(res, 503, { error: 'tts-unavailable', reason: 'urdu-error' });
+    }
     if (!text || !TTS_ENABLED) return send(res, 503, { error: 'tts-unavailable', reason: TTS_ENABLED ? 'empty' : 'disabled' });
     const key = crypto.createHash('sha1').update(TTS_MODEL + '|' + TTS_VOICE + '|' + text).digest('hex');
     const fp = path.join(TTS_CACHE, key + '.wav');

@@ -1,0 +1,14 @@
+# What's new in v2.9
+
+1. **Tab names** – the team tree is now **Org structure** (HODs see their own branch, master sees everything and can edit). The old Org structure tab, which decides which roles belong to which HOD, is now **Department setup**.
+2. **Round 2 invitation email** – online interviews now include a "How to join the online interview" box (open the Meet link, allow camera/mic, "Ask to join", what to prepare, what to do if the link fails).
+3. **Questions per position (from the JD)** – every position can have its own decision scenarios, job simulation, case study and voice questions.
+   - Shipped pre-generated for all default positions in `position-questions-seed.json` (applied once on first start; your later edits are kept).
+   - Admin → **Questions Editor** → pick a position (`↳ Position`) to edit, **Generate from JD (AI)** to rebuild it, or **Use department questions** to remove it.
+   - Admin → **Positions & JDs** → "Generate missing questions (AI)" builds them for new or custom positions. Run it again after you paste the real JDs (or use **Regenerate from JD** per position).
+   - The candidate sees, and is scored on, the same question set (the server resolves it and keeps a copy on each submission).
+   - `node tools/gen-position-questions.js --force` regenerates the whole seed file offline.
+4. **After the 2nd round** – new **Interview feedback** tab. The HOD (or master) scores 4 criteria, writes feedback and chooses *Good to go / On hold / Not a fit*. A "Good to go" can become **Make offer**; only HR (master) enters the salary and presses **Send offer** (HODs never see salary). The offer email goes through the platform mailer now; set `OFFER_SCRIPT_URL` + `OFFER_SCRIPT_KEY` later to hand it to an Apps Script instead.
+5. **Org structure tree** – company > departments > head + designation branches > people. Big branches start collapsed, with search, Expand/Collapse all and a List view.
+6. **Recommended tab** – rebuilt as cards so all buttons stay visible.
+7. **Urdu voice interview** – on the system-check screen the candidate picks English or Urdu. In Urdu mode SARAH asks every question, follow-up, reaction and closing line in Urdu (shown right-to-left AND spoken), and listens in Urdu (Whisper is forced to Urdu, so it is not mistaken for Hindi). Questions are translated on the fly by Groq and cached in `data/translate-ur.json`; the Urdu voice is the Edge neural voice `ur-PK-UzmaNeural` (package `msedge-tts`, cached in `data/tts-cache`). If translation or the Urdu voice is unavailable, SARAH falls back to the browser voice, or to English with Urdu answers still accepted. Urdu answers are scored by the AI on meaning (the English keyword rubric is skipped so Urdu is never penalised). Optional env: `TTS_VOICE_UR` (default `ur-PK-UzmaNeural`).
