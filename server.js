@@ -73,7 +73,9 @@ let EdgeTTS = null;
 // msedge-tts expects the global Web Crypto API, which older Node versions (e.g. 18 on some hosts) do not define.
 if (!globalThis.crypto) { try { globalThis.crypto = require('crypto').webcrypto; } catch (e) { /* ignore */ } }
 try { EdgeTTS = require('msedge-tts'); } catch (e) { /* optional */ }
-const URDU_VOICE = process.env.TTS_VOICE_UR || 'ur-PK-UzmaNeural';
+const URDU_VOICE = process.env.TTS_VOICE_UR || 'ur-PK-UzmaNeural';          // reads Urdu script (used by Azure and as a fallback)
+const ROMAN_VOICE = process.env.TTS_VOICE_ROMAN || 'en-IN-NeerjaNeural';   // reads Roman Urdu (Latin letters): natural English words + Urdu
+const ROMAN_ON = String(process.env.URDU_ROMAN_VOICE || 'true').toLowerCase() !== 'false';   // URDU_ROMAN_VOICE=false -> use Uzma with Urdu script
 const urduTtsState = { disabledUntil: 0 };
 const urSticky = new Map();   // interview session id -> the Urdu voice engine it started with (so one interview never switches voices)
 function urduTtsAvailable() { return TTS_ENABLED; }   // Edge neural voice first, Google voice as backup (no package needed)
@@ -122,14 +124,14 @@ async function synthUrduGoogle(text) {
   const bufs = []; for (const p of parts.filter((x) => x.trim())) bufs.push(await one(p.trim()));
   return Buffer.concat(bufs);
 }
-function synthUrdu(text) {
+function synthUrdu(text, voiceName) {
   return new Promise((resolve, reject) => {
     let done = false;
     const fail = (e) => { if (!done) { done = true; reject(e instanceof Error ? e : new Error(String(e))); } };
     const timer = setTimeout(() => fail(new Error('timeout')), 15000);
     (async () => {
       const tts = new EdgeTTS.MsEdgeTTS();
-      await tts.setMetadata(URDU_VOICE, EdgeTTS.OUTPUT_FORMAT.AUDIO_24KHZ_48KBITRATE_MONO_MP3);
+      await tts.setMetadata(voiceName || URDU_VOICE, EdgeTTS.OUTPUT_FORMAT.AUDIO_24KHZ_48KBITRATE_MONO_MP3);
       const { audioStream } = tts.toStream(text, { rate: '-6%' });
       const chunks = [];
       audioStream.on('data', (c) => chunks.push(c));
@@ -679,6 +681,31 @@ async function groqChat(messages, opts) {
     }
   }
   throw lastErr || new Error('all Groq models unavailable');
+}
+
+// Urdu script -> Roman Urdu for the Neerja voice (an English-accented voice reads Latin letters naturally, English words included).
+const romanCache = new Map();
+const romanFile = path.join(DATA, 'roman-ur.json');
+try { Object.entries(JSON.parse(fs.readFileSync(romanFile, 'utf8'))).forEach(([k, v]) => romanCache.set(k, v)); } catch (e) { /* first run */ }
+let romanSaveTimer = null;
+async function romanUrdu(text) {
+  const t = String(text || '').replace(/\s+/g, ' ').trim();
+  if (romanCache.has(t)) return romanCache.get(t);
+  const sys = `You convert Urdu (and Urdu/English mixed) text into Roman Urdu so that an Indian-English text-to-speech voice can read it aloud naturally.
+Rules:
+- Output Latin letters only, no Urdu script. Spell Urdu words phonetically the way an educated Pakistani types them: aap, kya, hai, hain, nahin, bataiye, kijiye, kaise, chaliye, shukriya, ji, theek hai, bahut.
+- IMPORTANT: the Urdu word کیا has two meanings. As "what / whether" write "kya" (aap ka naam kya hai?). As the past tense of "to do" (کیا، کیے، کیں) write "kiya" (aap ne kya kiya? = "what did you do?", handle kiya, kaam kiya). Also: ہوا = hua, ہوئی = hui, گیا = gaya, دیا = diya, لیا = liya.
+- Use spellings an English-accented voice reads correctly: baare mein (not "bare"), bataiye, kijiye, samjhaiye, achhe, bohat, shukriya, nahin, theek, chaliye, zaroor, kaise, kyun.
+- Write English words (experience, customer, background, team, example, problem, thank you...) in normal English spelling.
+- Write ڈیواگو as Dvago and سارہ as Sarah. Keep digits.
+- Keep the punctuation: commas, full stops (۔ becomes .) and question marks (؟ becomes ?).
+- Do not translate, shorten or add anything. Output ONLY the converted line.`;
+  const out = await groqChat([{ role: 'system', content: sys }, { role: 'user', content: t }], { temperature: 0, maxTokens: 1500, tryAll: true, first: URDU_MODEL });
+  const r = String(out.text || '').replace(/،/g, ',').replace(/؟/g, '?').replace(/۔/g, '.').replace(/[ً-ٰٟ]/g, '').replace(/^["'\s]+|["'\s]+$/g, '').replace(/\s+/g, ' ');
+  if (!r || /[؀-ۿ]/.test(r) || !/[A-Za-z]/.test(r)) throw new Error('roman conversion invalid: ' + r.slice(0, 60));
+  romanCache.set(t, r);
+  clearTimeout(romanSaveTimer); romanSaveTimer = setTimeout(() => { try { fs.writeFileSync(romanFile, JSON.stringify(Object.fromEntries(romanCache))); } catch (e) {} }, 2000);
+  return r;
 }
 
 // Rewrites a line so that EVERY word (incl. English loanwords) is in Urdu script - the Urdu voice cannot read Latin letters.
@@ -1350,7 +1377,7 @@ async function api(req, res, url) {
       const all = urduEngines().concat('google');
       const st = sid && urSticky.get(sid);
       const order = st && all.includes(st.eng) ? [st.eng].concat(all.filter((e) => e !== st.eng)) : all;
-      const tagOf = (eng) => (eng === 'azure' ? (process.env.AZURE_SPEECH_VOICE || URDU_VOICE) : eng === 'edge' ? URDU_VOICE : 'g');
+      const tagOf = (eng) => (eng === 'azure' ? (process.env.AZURE_SPEECH_VOICE || URDU_VOICE) : eng === 'edge' ? (ROMAN_ON ? ROMAN_VOICE + '-roman' : URDU_VOICE) : 'g');
       const fpOf = (eng) => path.join(TTS_CACHE, crypto.createHash('sha1').update('ur3|' + eng + '|' + tagOf(eng) + '|' + utext).digest('hex') + '.mp3');
       const sendMp3 = (buf, eng) => { res.writeHead(200, Object.assign({ 'Content-Type': 'audio/mpeg', 'Content-Length': buf.length, 'Cache-Control': 'private, max-age=86400', 'X-TTS-Engine': eng || 'cache' }, SECURITY_HEADERS)); res.end(buf); };
       const uip = req.socket.remoteAddress || '?';
@@ -1359,7 +1386,17 @@ async function api(req, res, url) {
       if (unow - uh.t > 60000) { uh.n = 0; uh.t = unow; }
       uh.n++; ttsHits.set(uip, uh);
       if (uh.n > 90) return send(res, 429, { error: 'too-many-requests' });
-      let ubuf = null, usedVoice = '', fromCache = false;
+      let ubuf = null, usedVoice = '', fromCache = false, skipCache = false;
+      // Edge engine: Neerja reads Roman Urdu. If the conversion is unavailable this one line uses Uzma (Urdu script) and is not cached.
+      const edgeSynth = async (t) => {
+        if (ROMAN_ON && groqEnabled()) {
+          let rom = '';
+          try { rom = await romanUrdu(t); } catch (e) { console.warn('[tts-ur] roman conversion failed:', e.message); }
+          if (rom) { skipCache = false; return synthUrdu(rom, ROMAN_VOICE); }
+          skipCache = true;
+        }
+        return synthUrdu(t, URDU_VOICE);
+      };
       for (const eng of order) {
         const f = fpOf(eng);
         if (fs.existsSync(f)) { ubuf = fs.readFileSync(f); usedVoice = eng; fromCache = true; break; }
@@ -1368,7 +1405,7 @@ async function api(req, res, url) {
         const tries = eng === 'edge' ? 7 : 1;   // the free Edge service drops many streams: retry (more when the interview is already using it - a short delay beats a voice change)
         for (let attempt = 1; attempt <= tries && !ubuf; attempt++) {
           if (attempt > 1) await new Promise((r) => setTimeout(r, 250));
-          try { ubuf = await (eng === 'azure' ? synthUrduAzure(utext) : eng === 'edge' ? synthUrdu(utext) : synthUrduGoogle(utext)); usedVoice = eng; }
+          try { ubuf = await (eng === 'azure' ? synthUrduAzure(utext) : eng === 'edge' ? await edgeSynth(utext) : synthUrduGoogle(utext)); usedVoice = eng; }
           catch (e) {
             console.warn('[tts-ur] ' + eng + ' failed:', e.message);
             urduTtsState.fl = urduTtsState.fl || {}; urduTtsState.off = urduTtsState.off || {};
@@ -1376,7 +1413,7 @@ async function api(req, res, url) {
             if (/\b(401|402|403|429)\b/.test(e.message) || (urduTtsState.fl[eng] >= (eng === 'edge' ? 9 : 3) && !(isSticky && eng !== 'edge'))) { urduTtsState.off[eng] = Date.now() + 5 * 60000; urduTtsState.fl[eng] = 0; console.warn('[tts-ur] ' + eng + ' paused for 5 min'); }
           }
         }
-        if (ubuf) { urduTtsState.fl = urduTtsState.fl || {}; urduTtsState.fl[eng] = 0; try { fs.writeFileSync(fpOf(eng), ubuf); } catch (e) { /* cache is best-effort */ } break; }
+        if (ubuf) { urduTtsState.fl = urduTtsState.fl || {}; urduTtsState.fl[eng] = 0; if (!skipCache) { try { fs.writeFileSync(fpOf(eng), ubuf); } catch (e) { /* cache is best-effort */ } } break; }
       }
       if (ubuf) {
         // the first engine stays the interview's voice; a one-off fallback line does not switch the rest
