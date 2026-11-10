@@ -20,6 +20,9 @@
   const ADAPTIVE_COUNT = 2;
   const ADAPTIVE_BACKUP = ['Tell me about a challenge you faced in your most recent role and how you handled it.', 'Which part of this position do you feel most confident about, and which part would you want support to learn?'];
   const GAME_SECONDS = 40;
+  // Urdu interview mode: SARAH shows + speaks Urdu. Questions are translated by the server (Groq); these fixed lines are pre-written.
+  const ACKS_UR = ['شکریہ، یہ بہت مددگار ہے۔', 'بہت اچھا، بتانے کا شکریہ۔', 'واہ، آپ نے اچھی تفصیل دی، شکریہ۔', 'شکریہ، اس سے مجھے اچھی طرح اندازہ ہو گیا۔'];
+  const isUrdu = (t) => { const s = String(t || ''); const L = (s.match(/\p{L}/gu) || []).length; return L > 0 && (s.match(/[؀-ۿ]/g) || []).length / L > 0.4; };
 
   const CITIES = ['Karachi', 'Lahore', 'Multan', 'Hyderabad', 'Bahawalpur', 'Sahiwal', 'Kasur', 'Burewala', 'Vehari', 'Khanewal'];
   const EDUCATION = ['Matric / O-Levels', 'Intermediate / A-Levels', 'Diploma / Certificate', "Bachelor's Degree", "Master's Degree", 'Pharm-D', 'ACCA / CA / CMA'];
@@ -170,8 +173,10 @@
   const orbState = (orb, st) => orb && orb.setAttribute('data-state', st);
 
   async function say(text, orb, captionEl) {
+    const ur = isUrdu(text);
+    if (captionEl) { captionEl.setAttribute('dir', ur ? 'rtl' : 'ltr'); if (ur) captionEl.setAttribute('lang', 'ur'); else captionEl.removeAttribute('lang'); }
     const typing = captionEl ? UI.typeText(captionEl, text, 24) : Promise.resolve();
-    await Voice.speak(text, { onstart: () => orbState(orb, 'speaking'), onend: () => orbState(orb, 'idle') });
+    await Voice.speak(text, { lang: ur ? 'ur-PK' : undefined, onstart: () => orbState(orb, 'speaking'), onend: () => orbState(orb, 'idle') });
     if (captionEl && captionEl._typeStop) captionEl._typeStop();
     await typing;
   }
@@ -1128,7 +1133,7 @@
         <div class="chk"><div class="k-ico">${I('mic', 20)}</div><div class="k-txt"><b>Microphone</b><span id="micTxt">Click test and say a few words.</span></div><div class="meter" id="meter">${'<i></i>'.repeat(12)}</div><button class="btn btn-ghost btn-sm" id="micBtn">Test</button></div>
         <div class="chk"><div class="k-ico">${I('volume', 20)}</div><div class="k-txt"><b>Speakers</b><span id="spkTxt">Play a short message from SARAH.</span></div><button class="btn btn-ghost btn-sm" id="spkBtn">Play</button></div>
         <div class="chk"><div class="k-ico">${I('wifi', 20)}</div><div class="k-txt"><b>Internet</b><span>${navigator.onLine ? 'You are online.' : 'You appear to be offline.'}</span></div><span class="k-state ${navigator.onLine ? 'k-ok' : 'k-bad'}">${navigator.onLine ? 'Online' : 'Offline'}</span></div>
-        <div class="chk"><div class="k-ico">${I('globe', 20)}</div><div class="k-txt"><b>Answer language</b><span>Speak in English or Urdu — SARAH understands both.</span></div><div class="lang-pick" id="lang"><button data-l="en-US">English</button><button data-l="ur-PK">اردو Urdu</button></div></div>
+        <div class="chk"><div class="k-ico">${I('globe', 20)}</div><div class="k-txt"><b>Answer language</b><span>Choose English or Urdu — SARAH will listen, speak and ask her questions in the language you pick.</span></div><div class="lang-pick" id="lang"><button data-l="en-US">English</button><button data-l="ur-PK">اردو Urdu</button></div></div>
       </div>
       <div class="row-end"><button class="btn btn-ghost" id="back">${I('left', 16)} Back</button><button class="btn btn-primary btn-lg" id="go">Start voice interview ${I('right', 18)}</button></div>
     </div>`);
@@ -1152,7 +1157,8 @@
     });
     $('#spkBtn').addEventListener('click', async () => {
       $('#spkTxt').textContent = 'Playing…';
-      await Voice.speak('Hello! Can you hear me clearly? Great, let\'s continue.');
+      if (S.voiceLang === 'ur-PK') await Voice.speak('السلام علیکم! کیا آپ مجھے صاف سنائی دے رہی ہوں؟ بہت اچھا، چلیے آگے بڑھتے ہیں۔', { lang: 'ur-PK' });
+      else await Voice.speak('Hello! Can you hear me clearly? Great, let\'s continue.');
       $('#spkTxt').innerHTML = `<span style="color:var(--g-300)">Played. If you heard SARAH, your speakers are fine.</span>`;
     });
     onLeave(() => meter && meter.stop());
@@ -1199,7 +1205,8 @@
         <div class="chat" id="chat"></div>
         <div id="vCtl"></div>
       </section></div>`);
-    const V = { qs, orb: $('.orb'), chat: $('#chat'), ctl: $('#vCtl'), rec: null, meter: null, timer: null, typing: S.voiceTyping || !Voice.canListen, part: 'main', live: null, t0: 0, alive: true, totalFollowUps: 0, perQFollowUps: 0, mediaRec: null, mediaChunks: [], mediaStream: null, vad: null, startAt: Date.now() };
+    const UR = S.voiceLang === 'ur-PK';
+    const V = { ur: {}, urFailed: false, qs, orb: $('.orb'), chat: $('#chat'), ctl: $('#vCtl'), rec: null, meter: null, timer: null, typing: S.voiceTyping || !Voice.canListen, part: 'main', live: null, t0: 0, alive: true, totalFollowUps: 0, perQFollowUps: 0, mediaRec: null, mediaChunks: [], mediaStream: null, vad: null, startAt: Date.now() };
     const onEnterKey = (ev) => { if (ev.key === 'Enter' && V.phase === 'recording' && !ev.repeat) { ev.preventDefault(); stopRec(false); } };
     document.addEventListener('keydown', onEnterKey);
     onLeave(() => { V.alive = false; document.removeEventListener('keydown', onEnterKey); stopRec(true); teardownAudio(); });
@@ -1212,10 +1219,31 @@
       V.mediaRec = null; V.mediaStream = null; V.keepStream = null; V.vad = null;
     }
 
+    // ---- Urdu mode helpers: translate the English question bank once, then look the Urdu up by its English text ----
+    async function trBatch(list) {
+      const need = [...new Set(list.filter((t) => t && !V.ur[t]))];
+      for (let i = 0; i < need.length && !V.urFailed; i += 8) {
+        const part = need.slice(i, i + 8);
+        try {
+          const ctl = typeof AbortController === 'function' ? new AbortController() : null;
+          const timer = setTimeout(() => ctl && ctl.abort(), 30000);
+          const res = await fetch('api/translate', { method: 'POST', headers: { 'Content-Type': 'application/json' }, signal: ctl ? ctl.signal : undefined, body: JSON.stringify({ texts: part }) });
+          clearTimeout(timer);
+          const d = res.ok ? await res.json() : null;
+          if (d && Array.isArray(d.texts)) part.forEach((t, k) => { if (d.texts[k]) V.ur[t] = d.texts[k]; });
+        } catch (e) { /* handled below */ }
+        if (part.some((t) => !V.ur[t])) V.urFailed = true;   // translation unavailable -> run this interview in English
+      }
+    }
+    const disp = (en) => (UR && !V.urFailed && V.ur[en]) || en;
+    const ack = (i) => (UR && !V.urFailed ? ACKS_UR : ACKS)[i % ACKS.length];
+
     function addMsg(who, text, meta) {
       const el = document.createElement('div');
       el.className = 'msg ' + (who === 'SARAH' ? 'dia' : who);
       el.innerHTML = who === 'SARAH' ? `<div style="display:block;line-height:0"><span class="who">SARAH</span></div><span class="bubble-text"></span>` : `<span class="txt">${esc(text)}</span>${meta ? `<span class="meta">${meta}</span>` : ''}`;
+      const tx = el.querySelector(who === 'SARAH' ? '.bubble-text' : '.txt');
+      if (tx && (isUrdu(text) || (UR && who !== 'SARAH'))) { tx.setAttribute('dir', 'auto'); if (isUrdu(text)) tx.setAttribute('lang', 'ur'); }
       if (who === 'SARAH') el.querySelector('.bubble-text').textContent = text;
       V.chat.appendChild(el);
       V.chat.scrollTop = V.chat.scrollHeight;
@@ -1226,7 +1254,7 @@
     // rebuild previous turns after refresh
     for (let k = 0; k < S.voiceIdx; k++) {
       const e = S.voice[k]; if (!e) continue;
-      addMsg('SARAH', qs[k].q); addMsg('me', e.answer, metaFor(e));
+      addMsg('SARAH', disp(qs[k].q)); addMsg('me', e.answer, metaFor(e));
       if (e.followUp) { addMsg('SARAH', e.followUp.q); addMsg('me', e.followUp.answer, metaFor(e.followUp)); }
     }
 
@@ -1452,7 +1480,8 @@
             alreadyAskedForQ: V.perQFollowUps,
             totalAsked: V.totalFollowUps,
             alreadyClarified: V.perQClarifies || 0,
-            elapsedSec: Math.round((Date.now() - V.startAt) / 1000)
+            elapsedSec: Math.round((Date.now() - V.startAt) / 1000),
+            lang: UR && !V.urFailed ? 'ur-PK' : 'en-US'
           })
         });
         if (res.ok) fu = await res.json();
@@ -1468,13 +1497,13 @@
       save();
       progress();
       if (S.voiceIdx >= qs.length) return adaptiveStep(fu && fu.ack);
-      begin((fu && fu.ack) || ACKS[S.voiceIdx % ACKS.length]);
+      begin((fu && fu.ack) || ack(S.voiceIdx));
     }
 
     async function next() {
       if (V.part === 'adaptive') {
-        const ack = ACKS[(V.adIdx + 1) % ACKS.length];
-        return adaptiveDone() >= ADAPTIVE_COUNT ? finish(ack) : adaptiveStep(ack);
+        const ak = ack(V.adIdx + 1);
+        return adaptiveDone() >= ADAPTIVE_COUNT ? finish(ak) : adaptiveStep(ak);
       }
       const e = S.voice[S.voiceIdx];
       const q = qs[S.voiceIdx];
@@ -1518,7 +1547,7 @@
         V.lastMe = addMsg('me', e.answer, metaFor(e));
         return next();
       }
-      ask(V.part === 'main' ? qs[k].q : S.voice[k].followUp.q, prefix);
+      ask(V.part === 'main' ? disp(qs[k].q) : S.voice[k].followUp.q, prefix);
     }
 
     // ---- Adaptive deep-dive questions (AI-written from resume + JD + answers; fixed backup if the AI is unavailable) ----
@@ -1529,17 +1558,17 @@
         if (v && v.answer) turns.push({ q: v.q, a: v.answer });
         if (v && v.followUp && v.followUp.answer) turns.push({ q: v.followUp.q, a: v.followUp.answer });
       });
-      (S.adaptive || []).filter((a) => a.answer).forEach((a) => turns.push({ q: a.q, a: a.answer }));
+      (S.adaptive || []).filter((a) => a.answer).forEach((a) => turns.push({ q: a.qEn || a.q, a: a.answer }));
       const ctl = typeof AbortController === 'function' ? new AbortController() : null;
       const timer = setTimeout(() => ctl && ctl.abort(), 12000);
       try {
         const res = await fetch('api/sarah-adaptive', {
           method: 'POST', headers: { 'Content-Type': 'application/json' }, signal: ctl ? ctl.signal : undefined,
-          body: JSON.stringify({ roleTitle: role().title, positionTitle: S.position ? S.position.title : '', jd: S.position ? S.position.jd : '', resumeText: S.resume && S.resume.text ? S.resume.text : '', turns, asked: (S.adaptive || []).map((a) => a.q) })
+          body: JSON.stringify({ roleTitle: role().title, positionTitle: S.position ? S.position.title : '', jd: S.position ? S.position.jd : '', resumeText: S.resume && S.resume.text ? S.resume.text : '', turns, asked: (S.adaptive || []).map((a) => a.qEn || a.q), lang: UR && !V.urFailed ? 'ur-PK' : 'en-US' })
         });
         if (!res.ok) return null;
         const d = await res.json();
-        return d && d.ok && d.q ? { q: d.q, why: d.why || '', source: 'ai' } : null;
+        return d && d.ok && d.q ? { q: d.q, qEn: d.qEn || '', why: d.why || '', source: 'ai' } : null;
       } catch (e) { return null; } finally { clearTimeout(timer); }
     }
     async function adaptiveStep(prefix) {
@@ -1552,21 +1581,25 @@
         orbState(V.orb, 'thinking');
         let item = await aiAdaptive();
         if (!V.alive) return;
-        if (!item) item = { q: ADAPTIVE_BACKUP[S.adaptive.length % ADAPTIVE_BACKUP.length], why: 'Standard backup question (AI was unavailable).', source: 'backup' };
+        if (!item) {
+          const en = ADAPTIVE_BACKUP[S.adaptive.length % ADAPTIVE_BACKUP.length];
+          if (UR && !V.urFailed) await trBatch([en]);
+          item = { q: disp(en), qEn: en, why: 'Standard backup question (AI was unavailable).', source: 'backup' };
+        }
         S.adaptive.push(Object.assign({ answer: '', mode: null, durationSec: 0 }, item));
         idx = S.adaptive.length - 1;
         save();
       }
       V.part = 'adaptive'; V.adIdx = idx;
       progress();
-      const lead = [prefix, idx === 0 ? 'I have two quick questions about your background.' : ''].filter(Boolean).join(' ');
+      const lead = [prefix, idx === 0 ? (UR && !V.urFailed ? 'اب آپ کے پس منظر کے بارے میں مجھے دو مختصر سوال پوچھنے ہیں۔' : 'I have two quick questions about your background.') : ''].filter(Boolean).join(' ');
       ask(S.adaptive[idx].q, lead);
     }
 
     async function finish(ack) {
       setPhase('speaking');
       const m = addMsg('SARAH', '');
-      await say(`${ack ? ack + ' ' : ''}Thank you${first() ? ' ' + first() : ''}! That's our conversation done. Next, I'll explain your assessment.`, V.orb, m.querySelector('.bubble-text'));
+      await say(UR && !V.urFailed ? `${ack ? ack + ' ' : ''}آپ کا بہت شکریہ! ہماری گفتگو مکمل ہو گئی۔ اب میں آپ کو اسسمنٹ کے بارے میں بتاؤں گی۔` : `${ack ? ack + ' ' : ''}Thank you${first() ? ' ' + first() : ''}! That's our conversation done. Next, I'll explain your assessment.`, V.orb, m.querySelector('.bubble-text'));
       if (V.alive) setTimeout(() => go('brief'), 600);
     }
 
@@ -1574,8 +1607,23 @@
     (S.adaptive || []).forEach((a) => { if (a.answer) { addMsg('SARAH', a.q); addMsg('me', a.answer, metaFor(a)); } });
 
     progress();
-    if (S.voiceIdx >= qs.length) return adaptiveStep('');
-    begin(S.voiceIdx === 0 ? `Let's begin, ${first() || 'and relax'}.` : '');
+    const kickoff = () => {
+      if (!V.alive) return;
+      if (S.voiceIdx >= qs.length) return adaptiveStep('');
+      const ur = UR && !V.urFailed;
+      begin(S.voiceIdx === 0 ? (ur ? 'آئیے شروع کرتے ہیں، اور بالکل پرسکون رہیے۔' : `Let's begin, ${first() || 'and relax'}.`) : '');
+    };
+    if (UR) {
+      setPhase('speaking');
+      V.ctl.innerHTML = '<div class="mic-hint">SARAH is getting ready for your Urdu interview…</div>';
+      orbState(V.orb, 'thinking');
+      trBatch(qs.map((q) => q.q)).then(() => {
+        if (V.urFailed) UI.toast('Urdu is not available right now, so SARAH will continue in English. You can still answer in Urdu.', 'error');
+        // rebuild earlier turns in Urdu if the page was refreshed mid-interview
+        if (!V.urFailed && S.voiceIdx > 0) { V.chat.innerHTML = ''; for (let k = 0; k < S.voiceIdx; k++) { const e = S.voice[k]; if (!e) continue; addMsg('SARAH', disp(qs[k].q)); addMsg('me', e.answer, metaFor(e)); if (e.followUp) { addMsg('SARAH', e.followUp.q); addMsg('me', e.followUp.answer, metaFor(e.followUp)); } } }
+        kickoff();
+      });
+    } else kickoff();
   }
 
   // ---------- Assessment briefing ----------

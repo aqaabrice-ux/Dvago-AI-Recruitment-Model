@@ -30,7 +30,12 @@
     const w = words(text).length;
     const t = norm(text);
     const hits = checks.filter((c) => hitAny(t, c.kw));
-    const content = checks.length ? hits.length / checks.length : 0.5;
+    // Urdu-script answers can't match the English keyword rubric, so content is scored neutral here (not penalised);
+    // the AI evaluator judges the real content of Urdu answers.
+    const letters = (text.match(/\p{L}/gu) || []).length;
+    const urduShare = letters ? (text.match(/[؀-ۿ]/g) || []).length / letters : 0;
+    const urdu = urduShare > 0.4;
+    const content = urdu ? 0.6 : checks.length ? hits.length / checks.length : 0.5;
     let len = 0;
     if (w >= 40 && w <= 280) len = 1; else if (w > 280) len = 0.85; else if (w >= 20) len = 0.6; else if (w >= 8) len = 0.3; else len = 0.05;
     const fillers = countFillers(text);
@@ -40,8 +45,8 @@
     const dur = Number(item.durationSec || 0) + Number((item.followUp && item.followUp.durationSec) || 0);
     const wpm = item.mode === 'voice' && dur > 5 ? round(w / (dur / 60)) : null;
     return {
-      id: item.id, q: item.q, mode: item.mode || 'text', words: w, fillers, wpm,
-      covered: hits.map((h) => h.label), missed: checks.filter((c) => !hits.includes(c)).map((c) => c.label),
+      id: item.id, q: item.q, mode: item.mode || 'text', words: w, fillers, wpm, lang: urdu ? 'ur' : 'en',
+      covered: urdu ? [] : hits.map((h) => h.label), missed: urdu ? [] : checks.filter((c) => !hits.includes(c)).map((c) => c.label),
       score: round(score)
     };
   }

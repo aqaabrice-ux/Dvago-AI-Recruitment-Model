@@ -811,10 +811,10 @@
         const vi = (ev.sections?.voice?.items || [])[k] || {};
         const hasAudio = v.audio && v.audio.file;
         return `<div class="ans"><div class="ans-head"><b>Q${k + 1} · ${v.mode === 'voice' ? 'Voice' : 'Typed'}${hasAudio ? ' · <span style="color:var(--brand-dark)">🔊 Audio</span>' : ''}</b><span class="badge ${vi.score >= 70 ? 'b-good' : vi.score >= 50 ? 'b-warn' : 'b-bad'}">${vi.score || 0}/100</span></div>
-          <div class="q">${esc(v.q)}</div>
-          <div class="a ${v.mode === 'voice' ? 'voice' : ''}">${esc(v.answer) || '<em style="color:var(--muted)">No answer</em>'}</div>
+          <div class="q" dir="auto">${esc(v.q)}</div>
+          <div class="a ${v.mode === 'voice' ? 'voice' : ''}" dir="auto">${esc(v.answer) || '<em style="color:var(--muted)">No answer</em>'}</div>
           ${hasAudio ? `<div class="aud-wrap" style="margin-top:8px"><button type="button" class="btn btn-outline btn-sm" data-aud="${esc(d.id)}|${esc(v.id)}">\u25B6 Play voice answer</button></div>` : '<div class="muted" style="margin-top:8px;font-size:12px">No audio recorded for this answer</div>'}
-          ${v.followUp ? `<div class="q" style="margin-top:10px"><b style="color:var(--brand-dark)">Follow-up:</b> ${esc(v.followUp.q)}</div><div class="a ${v.followUp.mode === 'voice' ? 'voice' : ''}">${esc(v.followUp.answer) || '<em>No answer</em>'}</div>` : ''}
+          ${v.followUp ? `<div class="q" dir="auto" style="margin-top:10px"><b style="color:var(--brand-dark)">Follow-up:</b> ${esc(v.followUp.q)}</div><div class="a ${v.followUp.mode === 'voice' ? 'voice' : ''}" dir="auto">${esc(v.followUp.answer) || '<em>No answer</em>'}</div>` : ''}
           <div class="meta"><span>${I('clock', 11)}${v.durationSec || 0}s</span><span>${(v.answer || '').split(/\s+/).filter(Boolean).length} words</span>${vi.wpm ? `<span>${vi.wpm} wpm</span>` : ''}${vi.fillers != null ? `<span>${vi.fillers} fillers</span>` : ''}</div>
         </div>`;
       }).join('') || '<p class="muted" style="text-align:center;padding:20px">No voice answers</p>'}</div>`

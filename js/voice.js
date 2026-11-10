@@ -31,11 +31,12 @@
           // Fallbacks
           /en-GB/i, /en-US/i, /^en/i
         ];
+    const isUr = lang && /^ur/.test(lang);
     for (const re of prefs) {
       const v = vs.find((x) => re.test(x.name) || re.test(x.lang));
-      if (v) return v;
+      if (v && (!isUr || /^ur/i.test(v.lang) || /urdu|uzma|asad/i.test(v.name))) return v;
     }
-    return vs[0];
+    return isUr ? null : vs[0];   // never read Urdu script with an English voice
   }
   if (synth) {
     voice = pickVoice();
@@ -48,14 +49,14 @@
   }
 
   // ---------- Neural voice (server /api/tts -> Groq Orpheus). Falls back to the browser voice on any failure. ----------
-  const neural = { failUntil: 0, audio: null, token: 0, stopToken: -1, abort: null, release: null };
+  const neural = { failUntil: 0, failUntilUr: 0, audio: null, token: 0, stopToken: -1, abort: null, release: null };
   // If the server says the AI voice is off (TTS_ENABLED=false or not configured), go straight to the browser voice.
-  try { fetch('api/health').then((r) => (r.ok ? r.json() : null)).then((j) => { if (j && j.tts === false) neural.failUntil = Infinity; }).catch(() => {}); } catch (e) {}
+  try { fetch('api/health').then((r) => (r.ok ? r.json() : null)).then((j) => { if (j && j.tts === false) neural.failUntil = Infinity; if (j && j.ttsUr === false) neural.failUntilUr = Infinity; }).catch(() => {}); } catch (e) {}
 
   // Split into clips of <= ~190 chars on sentence boundaries (the TTS model accepts ~200 chars per request).
   function chunkText(t, max) {
     max = max || 190;
-    const parts = t.match(/[^.!?]+[.!?]+["')\]]*\s*|[^.!?]+$/g) || [t];
+    const parts = t.match(/[^.!?۔؟]+[.!?۔؟]+["')\]]*\s*|[^.!?۔؟]+$/g) || [t];
     const out = []; let cur = '';
     const push = (s) => { s = s.trim(); if (s) out.push(s); };
     for (let p of parts) {
@@ -75,8 +76,8 @@
     return out;
   }
 
-  async function fetchClip(text, signal) {
-    const r = await fetch('api/tts', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text }), signal });
+  async function fetchClip(text, signal, lang) {
+    const r = await fetch('api/tts', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text, lang: lang || '' }), signal });
     if (!r.ok) throw Object.assign(new Error('tts ' + r.status), { status: r.status });
     return URL.createObjectURL(await r.blob());
   }
@@ -95,7 +96,7 @@
     stopNeural();
     const token = neural.token;
     const ctrl = new AbortController(); neural.abort = ctrl;
-    const clips = chunkText(clean).map((c) => fetchClip(c, ctrl.signal));
+    const clips = chunkText(clean).map((c) => fetchClip(c, ctrl.signal, hooks.lang));
     clips.forEach((p) => p.catch(() => {}));      // avoid unhandled-rejection noise; errors are handled in the loop
     let started = false;
     try {
@@ -117,7 +118,7 @@
     } catch (e) {
       if (token !== neural.token) { if (neural.stopToken === neural.token) hooks.onend && hooks.onend(); return true; }
       if (!started) {                              // nothing was heard yet -> let the browser voice take over
-        neural.failUntil = Date.now() + (e && e.status ? 120000 : 30000);
+        neural[hooks.lang && /^ur/.test(hooks.lang) ? 'failUntilUr' : 'failUntil'] = Date.now() + (e && e.status ? 120000 : 30000);
         return false;
       }
       hooks.onend && hooks.onend();                // failed mid-line: just end it
@@ -133,7 +134,8 @@
 
     speak(text, hooks = {}) {
       const clean = String(text || '').replace(/\u2014/g, ', ').replace(/\bDVAGO\b/g, 'Dvago').replace(/\bSARAH\b/g, 'Sarah').replace(/\bDIA\b/g, 'Sarah').replace(/\bJD\b/g, 'job description').trim();
-      const wantsNeural = !muted && clean.length > 2 && !(hooks.lang && /^ur/.test(hooks.lang)) && !(root.location && root.location.protocol === 'file:') && Date.now() >= neural.failUntil;
+      const isUr = !!(hooks.lang && /^ur/.test(hooks.lang));
+      const wantsNeural = !muted && clean.length > 2 && !(root.location && root.location.protocol === 'file:') && Date.now() >= (isUr ? neural.failUntilUr : neural.failUntil);
       if (synth) synth.cancel();
       if (!wantsNeural) { stopNeural(); return Voice.speakBrowser(text, hooks); }
       return speakNeural(clean, hooks).then((ok) => ok ? undefined : Voice.speakBrowser(text, hooks));
@@ -151,8 +153,16 @@
         const sayable = text.replace(/—/g, ', ').replace(/\bDVAGO\b/g, 'Dvago').replace(/\bSARAH\b/g, 'Sarah').replace(/\bDIA\b/g, 'Sarah').replace(/\bJD\b/g, 'job description');
         const u = new SpeechSynthesisUtterance(sayable);
         // Re-pick voice each time in case voices loaded late
-        if (!voice || hooks.lang) voice = pickVoice(hooks.lang);
+        const isUr = !!(hooks.lang && /^ur/.test(hooks.lang));
+        const pv = pickVoice(hooks.lang);
+        if (isUr && !pv) {                       // no Urdu voice on this device: show captions only, paced by reading time
+          hooks.onstart && hooks.onstart();
+          setTimeout(() => { hooks.onend && hooks.onend(); resolve(); }, Math.min(9000, 800 + text.length * 55));
+          return;
+        }
+        if (!isUr) { if (!voice) voice = pickVoice(); } else voice = pv;
         if (voice) u.voice = voice;
+        if (isUr) u.lang = (voice && voice.lang) || 'ur-PK';
         // Natural voices sound best at slightly slower pace
         const isNat = voice && /Natural|Enhanced|Siri|Online|Neural|WaveNet/i.test(voice.name);
         u.rate = isNat ? 0.94 : 0.88;   // slower pace: the plain system voices sound harsh when fast
