@@ -93,7 +93,7 @@ function synthUrdu(text) {
     (async () => {
       const tts = new EdgeTTS.MsEdgeTTS();
       await tts.setMetadata(URDU_VOICE, EdgeTTS.OUTPUT_FORMAT.AUDIO_24KHZ_48KBITRATE_MONO_MP3);
-      const { audioStream } = tts.toStream(text);
+      const { audioStream } = tts.toStream(text, { rate: '-6%' });
       const chunks = [];
       audioStream.on('data', (c) => chunks.push(c));
       audioStream.on('error', fail);
@@ -647,7 +647,7 @@ async function groqChat(messages, opts) {
 // ---- English -> Urdu translation for SARAH's lines (interview questions are written in English; Urdu mode shows + speaks the Urdu) ----
 const URDU_RE = /[؀-ۿ]/;
 const trCache = new Map();           // english text -> urdu
-const trFile = path.join(DATA, 'translate-ur.json');
+const trFile = path.join(DATA, 'translate-ur-v2.json');   // v2 = casual Urdu-English style (old cache was formal Urdu)
 try { Object.entries(JSON.parse(fs.readFileSync(trFile, 'utf8'))).forEach(([k, v]) => trCache.set(k, v)); } catch (e) { /* first run */ }
 let trSaveTimer = null;
 function trSaveSoon() { clearTimeout(trSaveTimer); trSaveTimer = setTimeout(() => { try { fs.writeFileSync(trFile, JSON.stringify(Object.fromEntries(trCache))); } catch (e) {} }, 2000); }
@@ -657,8 +657,9 @@ async function translateToUrdu(texts) {
   if (need.length) {
     const sys = `You translate lines spoken by SARAH, a warm, professional recruiter at DVAGO (a pharmacy & wellness retail chain in Pakistan), into natural spoken Urdu for a job interview.
 Rules:
-- Write in Urdu script only, in everyday polite spoken Urdu (use "آپ"), the way an educated Pakistani HR professional would speak. Not stiff, not Hindi-flavoured.
-- Transliterate English loanwords into Urdu script (کسٹمر، پرسکرپشن، سٹاک). Write DVAGO as ڈیواگو and SARAH as سارہ. Keep numbers as digits.
+- Write in Urdu script only (the voice reading it only knows Urdu script), polite ("آپ"), warm and natural.
+- Style (very important): speak like a modern, educated Pakistani HR professional talking to a candidate: everyday Urdu grammar with common English words mixed in (Urdu-English code-mixing), NOT pure literary Urdu. Use the everyday English word instead of a formal Urdu/Arabic/Persian one: say "choose" not "انتخاب", "simple" not "سادہ", "experience" not "تجربہ", "problem" not "مسئلہ", "skills" not "صلاحیتیں", "background" not "پس منظر", "situation", "example", "customer", "team", "manager", "difficult", "handle", "explain", "share", "answer", "important", "quickly", "clearly", "okay", "thank you", "please", "sorry". Write every English word in Urdu script exactly as Pakistanis pronounce it (چوز، سمپل، ایکسپیریئنس، پرابلم، سچویشن، کسٹمر، ٹیم، ہینڈل). Keep verbs, connectors and grammar in simple spoken Urdu. Short, warm, natural sentences. Never use heavy words like انتخاب، سادہ، تجربہ، مسئلہ، صلاحیت، پس منظر، دشوار، وضاحت. BALANCE: only nouns, adjectives and set phrases are English; the sentence structure, verbs, pronouns and connectors MUST stay Urdu (about 70% Urdu, 30% English). NEVER turn a whole sentence into English words written in Urdu script (wrong: "ٹیل می ایباؤٹ اے ڈفیکلٹ سچویشن"). Example. English: "Tell me about a difficult situation at work and how you managed it." Good Urdu: "آپ کے ورک میں کوئی ڈفیکلٹ سچویشن آئی ہو تو اس کے بارے میں بتائیں، اور آپ نے اسے کیسے ہینڈل کیا؟" Example. English: "Please choose the simplest way to explain this." Good Urdu: "اسے سمجھانے کا سب سے سمپل طریقہ چوز کریں۔"
+- Write DVAGO as ڈیواگو and SARAH as سارہ. Keep numbers as digits.
 - Keep the meaning and the question form exactly; do not add or remove information. Questions end with "؟", statements with "۔".
 Output STRICT JSON only: {"t":["<urdu for line 1>","<urdu for line 2>", ...]} with exactly ${need.length} items in the same order.`;
     const out = await groqChat([{ role: 'system', content: sys }, { role: 'user', content: JSON.stringify(need) }], { temperature: 0.2, maxTokens: 3000 });
@@ -865,7 +866,7 @@ Rules:
 - A single word or tiny fragment (like "medicine") is NOT a real answer. If follow-up budget remains, use "followup" and ask them warmly to explain, mentioning their word where it helps, e.g. "You mentioned medicine. Could you tell me a bit more about that?"
 - If follow-up budget is 0, you MUST use "next" (never "followup").
 - "followup" must be specific, warm, conversational, ${lang === 'ur' ? 'in Urdu' : 'English only'}. Never repeat the main question verbatim. Never ask more than one question.
-${lang === 'ur' ? `- URDU MODE: the candidate is being interviewed in Urdu (their answer may be Urdu, Roman Urdu or mixed with English). Write EVERY spoken string ("ack" and "q") in natural, polite, everyday spoken Urdu in Urdu script (use "آپ"), as an educated Pakistani HR professional would. Transliterate English loanwords into Urdu script. Keep the JSON keys and "action" values in English exactly as specified. React to what the candidate actually said.` : ''}
+${lang === 'ur' ? `- URDU MODE: the candidate is being interviewed in Urdu (their answer may be Urdu, Roman Urdu or mixed with English). Write EVERY spoken string ("ack" and "q") in Urdu script (use "آپ"). Style (very important): speak like a modern, educated Pakistani HR professional talking to a candidate: everyday Urdu grammar with common English words mixed in (Urdu-English code-mixing), NOT pure literary Urdu. Use the everyday English word instead of a formal Urdu/Arabic/Persian one: say "choose" not "انتخاب", "simple" not "سادہ", "experience" not "تجربہ", "problem" not "مسئلہ", "skills" not "صلاحیتیں", "background" not "پس منظر", "situation", "example", "customer", "team", "manager", "difficult", "handle", "explain", "share", "answer", "important", "quickly", "clearly", "okay", "thank you", "please", "sorry". Write every English word in Urdu script exactly as Pakistanis pronounce it (چوز، سمپل، ایکسپیریئنس، پرابلم، سچویشن، کسٹمر، ٹیم، ہینڈل). Keep verbs, connectors and grammar in simple spoken Urdu. Short, warm, natural sentences. Never use heavy words like انتخاب، سادہ، تجربہ، مسئلہ، صلاحیت، پس منظر، دشوار، وضاحت. BALANCE: only nouns, adjectives and set phrases are English; the sentence structure, verbs, pronouns and connectors MUST stay Urdu (about 70% Urdu, 30% English). NEVER turn a whole sentence into English words written in Urdu script (wrong: "ٹیل می ایباؤٹ اے ڈفیکلٹ سچویشن"). Example. English: "Tell me about a difficult situation at work and how you managed it." Good Urdu: "آپ کے ورک میں کوئی ڈفیکلٹ سچویشن آئی ہو تو اس کے بارے میں بتائیں، اور آپ نے اسے کیسے ہینڈل کیا؟" Example. English: "Please choose the simplest way to explain this." Good Urdu: "اسے سمجھانے کا سب سے سمپل طریقہ چوز کریں۔" Keep the JSON keys and "action" values in English exactly as specified. React to what the candidate actually said.` : ''}
 - "clarify" only for clearly unreadable input: "g g g g", "asdfasdf", keyboard mashing, abusive words. A short but real word is NOT gibberish.
 ${isFollowUp ? '- The text you are judging is the candidate\'s reply to YOUR follow-up. Do not ask another follow-up; use "next" with a natural ack.' : ''}`;
   const user = `Role: ${roleTitle}
@@ -1088,17 +1089,17 @@ async function api(req, res, url) {
     const DECLINE_UR_RE = /(معلوم\s*نہیں|پتہ?\s*نہیں|پتا\s*نہیں|نہیں\s*بتا|نہیں\s*جانتا|نہیں\s*جانتی|جواب\s*نہیں|کوئی\s*جواب\s*نہیں|چھوڑ\s*دی|آگے\s*چلی)/;
     const declined = wc > 0 && wc <= 10 && (DECLINE_RE.test(answerText) || DECLINE_UR_RE.test(answerText));
     const DECLINE_ACKS = UR ? [
-      'کوئی بات نہیں، بالکل پریشان نہ ہوں۔ چلیے اگلے سوال کی طرف چلتے ہیں۔',
-      'ٹھیک ہے، اگر آپ اس کا جواب نہیں دینا چاہتے تو کوئی مسئلہ نہیں۔ آگے بڑھتے ہیں۔',
-      'جی ٹھیک ہے، ایمانداری سے بتانے کا شکریہ۔ اگلا سوال دیکھتے ہیں۔'
+      'کوئی بات نہیں، ٹینشن نہ لیں۔ چلیں نیکسٹ سوال کی طرف چلتے ہیں۔',
+      'ٹھیک ہے، اگر آپ آنسر نہیں دینا چاہتے تو کوئی پرابلم نہیں۔ چلیں آگے بڑھتے ہیں۔',
+      'اوکے، ایمانداری سے بتانے کا شکریہ۔ چلیں نیکسٹ سوال دیکھتے ہیں۔'
     ] : [
       "That's completely okay, no pressure at all. Let's move on to the next question.",
       "No problem at all, it's fine if you'd rather not answer that. Let's move on.",
       "That's alright, thanks for being honest. Let's go to the next one."
     ];
     const FALLBACK_FOLLOWUPS = UR ? [
-      'کیا آپ اس بارے میں تھوڑا مزید بتا سکتے ہیں؟',
-      'کیا آپ کوئی مثال دے کر ذرا تفصیل سے بتا سکتے ہیں؟'
+      'کیا آپ اس کے بارے میں تھوڑا اور بتا سکتے ہیں؟',
+      'کیا آپ کوئی ایگزیمپل دے کر ذرا ڈیٹیل میں بتا سکتے ہیں؟'
     ] : [
       'Could you tell me a little more about that?',
       'Can you give me a bit more detail, maybe an example?'
@@ -1113,7 +1114,7 @@ async function api(req, res, url) {
     }
     // Gibberish → polite clarification, doesn't consume follow-up budget (if candidate hasn't already been clarified-once)
     if (gibberish && alreadyClarified < 1 && !b.isFollowUp) {
-      return send(res, 200, { action: 'clarify', q: UR ? 'معذرت، مجھے آپ کی بات ٹھیک سے سمجھ نہیں آئی۔ کیا آپ اپنا جواب دوبارہ دے سکتے ہیں؟' : "I'm sorry, I didn't quite catch that. Could you take a moment and share your answer again?", reason: 'gibberish-local' });
+      return send(res, 200, { action: 'clarify', q: UR ? 'سوری، مجھے آپ کی بات ٹھیک سے سمجھ نہیں آئی۔ کیا آپ اپنا آنسر دوبارہ دے سکتے ہیں؟' : "I'm sorry, I didn't quite catch that. Could you take a moment and share your answer again?", reason: 'gibberish-local' });
     }
     if (gibberish) {
       // Already clarified once (or this is the reply to a follow-up) and still gibberish -> move on gracefully
