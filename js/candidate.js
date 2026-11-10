@@ -1222,18 +1222,23 @@
     // ---- Urdu mode helpers: translate the English question bank once, then look the Urdu up by its English text ----
     async function trBatch(list) {
       const need = [...new Set(list.filter((t) => t && !V.ur[t]))];
-      for (let i = 0; i < need.length && !V.urFailed; i += 8) {
-        const part = need.slice(i, i + 8);
-        try {
-          const ctl = typeof AbortController === 'function' ? new AbortController() : null;
-          const timer = setTimeout(() => ctl && ctl.abort(), 30000);
-          const res = await fetch('api/translate', { method: 'POST', headers: { 'Content-Type': 'application/json' }, signal: ctl ? ctl.signal : undefined, body: JSON.stringify({ texts: part }) });
-          clearTimeout(timer);
-          const d = res.ok ? await res.json() : null;
-          if (d && Array.isArray(d.texts)) part.forEach((t, k) => { if (d.texts[k]) V.ur[t] = d.texts[k]; });
-        } catch (e) { /* handled below */ }
-        if (part.some((t) => !V.ur[t])) V.urFailed = true;   // translation unavailable -> run this interview in English
-      }
+      const one = async (part) => {
+        for (let attempt = 0; attempt < 2 && part.some((t) => !V.ur[t]); attempt++) {
+          try {
+            const ctl = typeof AbortController === 'function' ? new AbortController() : null;
+            const timer = setTimeout(() => ctl && ctl.abort(), 40000);
+            const res = await fetch('api/translate', { method: 'POST', headers: { 'Content-Type': 'application/json' }, signal: ctl ? ctl.signal : undefined, body: JSON.stringify({ texts: part.filter((t) => !V.ur[t]) }) });
+            clearTimeout(timer);
+            const d = res.ok ? await res.json() : null;
+            if (d && Array.isArray(d.texts)) part.filter((t) => !V.ur[t]).forEach((t, k) => { if (d.texts[k]) V.ur[t] = d.texts[k]; });
+            else console.warn('[urdu] translate failed:', res.status, d && (d.reason + ' ' + (d.detail || '')));
+          } catch (e) { console.warn('[urdu] translate error:', e && e.message); }
+        }
+      };
+      const parts = []; for (let i = 0; i < need.length; i += 4) parts.push(need.slice(i, i + 4));
+      await Promise.all(parts.map(one));
+      // Urdu is only switched off if NOTHING could be translated; a question that failed alone is simply asked in English.
+      if (need.length && need.every((t) => !V.ur[t])) V.urFailed = true;
     }
     const disp = (en) => (UR && !V.urFailed && V.ur[en]) || en;
     const ack = (i) => (UR && !V.urFailed ? ACKS_UR : ACKS)[i % ACKS.length];
@@ -1267,7 +1272,7 @@
 
     async function ask(text, prefix) {
       setPhase('speaking');
-      const full = prefix ? prefix + ' ' + text : text;
+      const full = prefix && !(isUrdu(prefix) && !isUrdu(text)) ? prefix + ' ' + text : text;   // never read an Urdu lead-in before an English question
       const m = addMsg('SARAH', '');
       const bt = m.querySelector('.bubble-text');
       await say(full, V.orb, bt);
