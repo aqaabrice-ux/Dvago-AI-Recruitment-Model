@@ -625,27 +625,40 @@ async function callGroq(model, messages, opts) {
 // Generic Groq chat helper: tries the working model, then the account's models, then fallbacks. Returns { text, model }.
 async function groqChat(messages, opts) {
   const accountModels = await fetchGroqAvailableModels();
-  const chain = [groqWorkingModel, GROQ_MODEL, ...accountModels, ...GROQ_FALLBACKS]
+  const chain = [opts && opts.first, groqWorkingModel, GROQ_MODEL, ...accountModels, ...GROQ_FALLBACKS]
     .filter(Boolean)
     .filter((m, i, a) => a.indexOf(m) === i && !groqDeadModels.has(m));
   let lastErr = null;
   for (const m of chain) {
     try {
       const data = await callGroq(m, messages, opts);
-      groqWorkingModel = m;
+      if (!(opts && opts.first)) groqWorkingModel = m;
       const text = data.choices && data.choices[0] && data.choices[0].message && data.choices[0].message.content;
       return { text: text || '', model: m };
     } catch (e) {
       lastErr = e;
-      if (e.status === 404) continue;
+      if (e.status === 404 || (opts && opts.tryAll && e.status !== 401 && e.status !== 403)) continue;
       throw e;
     }
   }
   throw lastErr || new Error('all Groq models unavailable');
 }
 
+// Rewrites a line so that EVERY word (incl. English loanwords) is in Urdu script - the Urdu voice cannot read Latin letters.
+async function urduScriptOnly(text) {
+  const t = String(text || '').replace(/DVAGO/gi, 'ڈیواگو').replace(/SARAH/gi, 'سارہ');
+  if (!/[A-Za-z]/.test(t)) return t;
+  try {
+    const out = await groqChat([{ role: 'system', content: 'Rewrite the given Urdu/English-mixed line so every word, including English loanwords, is written in Urdu script only (phonetically, e.g. background -> بیک گراؤنڈ, experience -> ایکسپیریئنس). Keep the meaning and wording otherwise. No A-Z letters in the output. Output ONLY the rewritten line.' }, { role: 'user', content: t }], { temperature: 0, maxTokens: 400, tryAll: true, first: URDU_MODEL });
+    const r = String(out.text || '').replace(/^["'\s]+|["'\s]+$/g, '').replace(/\s+/g, ' ');
+    if (r && URDU_RE.test(r) && !/[A-Za-z]/.test(r)) return r;
+  } catch (e) { console.warn('[urdu] script-only rewrite failed:', e.message); }
+  return t.replace(/[A-Za-z]+/g, ' ').replace(/\s+/g, ' ').trim();   // last resort: drop stray Latin words
+}
+
 // ---- English -> Urdu translation for SARAH's lines (interview questions are written in English; Urdu mode shows + speaks the Urdu) ----
 const URDU_RE = /[؀-ۿ]/;
+const URDU_MODEL = process.env.URDU_MODEL || 'openai/gpt-oss-120b';   // model that writes SARAH's Urdu (falls back to the normal chain if unavailable)
 const trCache = new Map();           // english text -> urdu
 const trFile = path.join(DATA, 'translate-ur-v2.json');   // v2 = casual Urdu-English style (old cache was formal Urdu)
 try { Object.entries(JSON.parse(fs.readFileSync(trFile, 'utf8'))).forEach(([k, v]) => trCache.set(k, v)); } catch (e) { /* first run */ }
@@ -657,16 +670,35 @@ async function translateToUrdu(texts) {
   if (need.length) {
     const sys = `You translate lines spoken by SARAH, a warm, professional recruiter at DVAGO (a pharmacy & wellness retail chain in Pakistan), into natural spoken Urdu for a job interview.
 Rules:
-- Write in Urdu script only (the voice reading it only knows Urdu script), polite ("آپ"), warm and natural.
-- Style (very important): speak like a modern, educated Pakistani HR professional talking to a candidate: everyday Urdu grammar with common English words mixed in (Urdu-English code-mixing), NOT pure literary Urdu. Use the everyday English word instead of a formal Urdu/Arabic/Persian one: say "choose" not "انتخاب", "simple" not "سادہ", "experience" not "تجربہ", "problem" not "مسئلہ", "skills" not "صلاحیتیں", "background" not "پس منظر", "situation", "example", "customer", "team", "manager", "difficult", "handle", "explain", "share", "answer", "important", "quickly", "clearly", "okay", "thank you", "please", "sorry". Write every English word in Urdu script exactly as Pakistanis pronounce it (چوز، سمپل، ایکسپیریئنس، پرابلم، سچویشن، کسٹمر، ٹیم، ہینڈل). Keep verbs, connectors and grammar in simple spoken Urdu. Short, warm, natural sentences. Never use heavy words like انتخاب، سادہ، تجربہ، مسئلہ، صلاحیت، پس منظر، دشوار، وضاحت. BALANCE: only nouns, adjectives and set phrases are English; the sentence structure, verbs, pronouns and connectors MUST stay Urdu (about 70% Urdu, 30% English). NEVER turn a whole sentence into English words written in Urdu script (wrong: "ٹیل می ایباؤٹ اے ڈفیکلٹ سچویشن"). Example. English: "Tell me about a difficult situation at work and how you managed it." Good Urdu: "آپ کے ورک میں کوئی ڈفیکلٹ سچویشن آئی ہو تو اس کے بارے میں بتائیں، اور آپ نے اسے کیسے ہینڈل کیا؟" Example. English: "Please choose the simplest way to explain this." Good Urdu: "اسے سمجھانے کا سب سے سمپل طریقہ چوز کریں۔"
+- Write in Urdu script ONLY. The voice that reads it cannot read Latin letters, so NEVER output any A-Z letters: English loanwords must be spelled phonetically in Urdu script. Polite ("آپ"), warm and natural.
+- Style (very important): speak like a modern, educated Pakistani HR professional talking to a candidate: everyday Urdu grammar with common English words mixed in (Urdu-English code-mixing), NOT pure literary Urdu. Use the everyday English word instead of a formal Urdu/Arabic/Persian one: say "choose" not "انتخاب", "simple" not "سادہ", "experience" not "تجربہ", "problem" not "مسئلہ", "skills" not "صلاحیتیں", "background" not "پس منظر", "situation", "example", "customer", "team", "manager", "difficult", "handle", "explain", "share", "answer", "important", "quickly", "clearly", "okay", "thank you", "please", "sorry". Write every English word in Urdu script exactly as Pakistanis pronounce it (چوز، سمپل، ایکسپیریئنس، پرابلم، سچویشن، کسٹمر، ٹیم، ہینڈل). Keep verbs, connectors and grammar in simple spoken Urdu. Short, warm, natural sentences. Never use heavy words like انتخاب، سادہ، تجربہ، مسئلہ، صلاحیت، پس منظر، دشوار، وضاحت. VERBS: never use an English verb on its own (no ڈو، ہاپنڈ، ڈیل، گیٹ، ٹیل). Translate every verb into normal Urdu (ہوا، کیا، بتائیں، سمجھائیں، دیکھیں); an English noun may be combined with an Urdu helper verb (ہینڈل کرنا، ڈسکس کرنا، شیئر کرنا). Never translate idioms word by word: understand the sentence first, then say it naturally in Urdu. "What happened, what did you do and what was the result?" must become "کیا ہوا، آپ نے کیا کیا، اور اس کا رزلٹ کیا نکلا؟". BALANCE: only nouns, adjectives and set phrases are English; the sentence structure, verbs, pronouns and connectors MUST stay Urdu (about 70% Urdu, 30% English). NEVER turn a whole sentence into English words written in Urdu script (wrong: "ٹیل می ایباؤٹ اے ڈفیکلٹ سچویشن"). Example. English: "Tell me about a difficult situation at work and how you managed it." Good Urdu: "آپ کے ورک میں کوئی ڈفیکلٹ سچویشن آئی ہو تو اس کے بارے میں بتائیں، اور آپ نے اسے کیسے ہینڈل کیا؟" Example. English: "Please choose the simplest way to explain this." Good Urdu: "اسے سمجھانے کا سب سے سمپل طریقہ چوز کریں۔" Example. English: "What are you good at?" Good Urdu: "آپ کس چیز میں اچھے ہیں؟" (never "گڈ ایٹ"). Example. English: "Tell me about a time you dealt with an angry customer." Good Urdu: "کوئی ایسا ٹائم بتائیں جب آپ کو کسی ناراض کسٹمر کو ہینڈل کرنا پڑا۔"
 - Write DVAGO as ڈیواگو and SARAH as سارہ. Keep numbers as digits.
 - Keep the meaning and the question form exactly; do not add or remove information. Questions end with "؟", statements with "۔".
 Output STRICT JSON only: {"t":["<urdu for line 1>","<urdu for line 2>", ...]} with exactly ${need.length} items in the same order.`;
-    const out = await groqChat([{ role: 'system', content: sys }, { role: 'user', content: JSON.stringify(need) }], { temperature: 0.2, maxTokens: 3000 });
-    const j = parseGroqJSON(out.text);
-    const arr = j && Array.isArray(j.t) ? j.t : null;
-    if (!arr || arr.length !== need.length) throw new Error('translation shape mismatch');
-    need.forEach((t, i) => { const u = String(arr[i] || '').replace(/\s+/g, ' ').trim(); if (u.length > 1 && URDU_RE.test(u)) trCache.set(t, u); });
+    const run = async (list, strict) => {
+      const sysN = sys.replace(/exactly \d+ items/, 'exactly ' + list.length + ' items') + (strict ? '\nIMPORTANT: your previous answer contained English (Latin) letters. EVERY word, including English loanwords, must be written in Urdu script only (e.g. بیک گراؤنڈ، ایکسپیریئنس). No A-Z letters at all.' : '');
+      const out = await groqChat([{ role: 'system', content: sysN }, { role: 'user', content: JSON.stringify(list) }], { temperature: 0.1, maxTokens: 4000, tryAll: true, first: URDU_MODEL });
+      const j = parseGroqJSON(out.text);
+      const arr = j && Array.isArray(j.t) ? j.t : null;
+      if (!arr || arr.length !== list.length) throw new Error('translation shape mismatch');
+      const bad = [];
+      list.forEach((t, i) => {
+        const u = String(arr[i] || '').replace(/\bDVAGO\b/gi, 'ڈیواگو').replace(/\bSARAH\b/gi, 'سارہ').replace(/\s+/g, ' ').trim();
+        if (u.length > 1 && URDU_RE.test(u) && !/[A-Za-z]/.test(u)) trCache.set(t, u);   // Latin letters would be mispronounced by the Urdu voice
+        else bad.push(t);
+      });
+      return bad;
+    };
+    try {
+      let left = await run(need);
+      for (let pass = 0; pass < 2 && left && left.length; pass++) {
+        console.warn('[translate] ' + left.length + ' line(s) had Latin letters / no Urdu - rewriting in pure Urdu script');
+        left = await run(left, true);
+      }
+    } catch (e) {
+      console.warn('[translate] batch failed (' + e.message + '), retrying one by one');
+      for (const t of need) { try { await run([t]); } catch (e2) { console.warn('[translate] single failed:', e2.message); } }
+    }
     trSaveSoon();
   }
   return src.map((t) => trCache.get(t) || '');
@@ -866,7 +898,7 @@ Rules:
 - A single word or tiny fragment (like "medicine") is NOT a real answer. If follow-up budget remains, use "followup" and ask them warmly to explain, mentioning their word where it helps, e.g. "You mentioned medicine. Could you tell me a bit more about that?"
 - If follow-up budget is 0, you MUST use "next" (never "followup").
 - "followup" must be specific, warm, conversational, ${lang === 'ur' ? 'in Urdu' : 'English only'}. Never repeat the main question verbatim. Never ask more than one question.
-${lang === 'ur' ? `- URDU MODE: the candidate is being interviewed in Urdu (their answer may be Urdu, Roman Urdu or mixed with English). Write EVERY spoken string ("ack" and "q") in Urdu script (use "آپ"). Style (very important): speak like a modern, educated Pakistani HR professional talking to a candidate: everyday Urdu grammar with common English words mixed in (Urdu-English code-mixing), NOT pure literary Urdu. Use the everyday English word instead of a formal Urdu/Arabic/Persian one: say "choose" not "انتخاب", "simple" not "سادہ", "experience" not "تجربہ", "problem" not "مسئلہ", "skills" not "صلاحیتیں", "background" not "پس منظر", "situation", "example", "customer", "team", "manager", "difficult", "handle", "explain", "share", "answer", "important", "quickly", "clearly", "okay", "thank you", "please", "sorry". Write every English word in Urdu script exactly as Pakistanis pronounce it (چوز، سمپل، ایکسپیریئنس، پرابلم، سچویشن، کسٹمر، ٹیم، ہینڈل). Keep verbs, connectors and grammar in simple spoken Urdu. Short, warm, natural sentences. Never use heavy words like انتخاب، سادہ، تجربہ، مسئلہ، صلاحیت، پس منظر، دشوار، وضاحت. BALANCE: only nouns, adjectives and set phrases are English; the sentence structure, verbs, pronouns and connectors MUST stay Urdu (about 70% Urdu, 30% English). NEVER turn a whole sentence into English words written in Urdu script (wrong: "ٹیل می ایباؤٹ اے ڈفیکلٹ سچویشن"). Example. English: "Tell me about a difficult situation at work and how you managed it." Good Urdu: "آپ کے ورک میں کوئی ڈفیکلٹ سچویشن آئی ہو تو اس کے بارے میں بتائیں، اور آپ نے اسے کیسے ہینڈل کیا؟" Example. English: "Please choose the simplest way to explain this." Good Urdu: "اسے سمجھانے کا سب سے سمپل طریقہ چوز کریں۔" Keep the JSON keys and "action" values in English exactly as specified. React to what the candidate actually said.` : ''}
+${lang === 'ur' ? `- URDU MODE: the candidate is being interviewed in Urdu (their answer may be Urdu, Roman Urdu or mixed with English). Write EVERY spoken string ("ack" and "q") in Urdu script (use "آپ"). Style (very important): speak like a modern, educated Pakistani HR professional talking to a candidate: everyday Urdu grammar with common English words mixed in (Urdu-English code-mixing), NOT pure literary Urdu. Use the everyday English word instead of a formal Urdu/Arabic/Persian one: say "choose" not "انتخاب", "simple" not "سادہ", "experience" not "تجربہ", "problem" not "مسئلہ", "skills" not "صلاحیتیں", "background" not "پس منظر", "situation", "example", "customer", "team", "manager", "difficult", "handle", "explain", "share", "answer", "important", "quickly", "clearly", "okay", "thank you", "please", "sorry". Write every English word in Urdu script exactly as Pakistanis pronounce it (چوز، سمپل، ایکسپیریئنس، پرابلم، سچویشن، کسٹمر، ٹیم، ہینڈل). Keep verbs, connectors and grammar in simple spoken Urdu. Short, warm, natural sentences. Never use heavy words like انتخاب، سادہ، تجربہ، مسئلہ، صلاحیت، پس منظر، دشوار، وضاحت. VERBS: never use an English verb on its own (no ڈو، ہاپنڈ، ڈیل، گیٹ، ٹیل). Translate every verb into normal Urdu (ہوا، کیا، بتائیں، سمجھائیں، دیکھیں); an English noun may be combined with an Urdu helper verb (ہینڈل کرنا، ڈسکس کرنا، شیئر کرنا). Never translate idioms word by word: understand the sentence first, then say it naturally in Urdu. "What happened, what did you do and what was the result?" must become "کیا ہوا، آپ نے کیا کیا، اور اس کا رزلٹ کیا نکلا؟". BALANCE: only nouns, adjectives and set phrases are English; the sentence structure, verbs, pronouns and connectors MUST stay Urdu (about 70% Urdu, 30% English). NEVER turn a whole sentence into English words written in Urdu script (wrong: "ٹیل می ایباؤٹ اے ڈفیکلٹ سچویشن"). Example. English: "Tell me about a difficult situation at work and how you managed it." Good Urdu: "آپ کے ورک میں کوئی ڈفیکلٹ سچویشن آئی ہو تو اس کے بارے میں بتائیں، اور آپ نے اسے کیسے ہینڈل کیا؟" Example. English: "Please choose the simplest way to explain this." Good Urdu: "اسے سمجھانے کا سب سے سمپل طریقہ چوز کریں۔" Example. English: "What are you good at?" Good Urdu: "آپ کس چیز میں اچھے ہیں؟" (never "گڈ ایٹ"). Example. English: "Tell me about a time you dealt with an angry customer." Good Urdu: "کوئی ایسا ٹائم بتائیں جب آپ کو کسی ناراض کسٹمر کو ہینڈل کرنا پڑا۔" Keep the JSON keys and "action" values in English exactly as specified. React to what the candidate actually said.` : ''}
 - "clarify" only for clearly unreadable input: "g g g g", "asdfasdf", keyboard mashing, abusive words. A short but real word is NOT gibberish.
 ${isFollowUp ? '- The text you are judging is the candidate\'s reply to YOUR follow-up. Do not ask another follow-up; use "next" with a natural ack.' : ''}`;
   const user = `Role: ${roleTitle}
@@ -880,12 +912,12 @@ Elapsed interview time: ${elapsedSec}s / 900s target`;
   const messages = [{ role: 'system', content: sys }, { role: 'user', content: user }];
   // Build chain: working model (if we found one) → configured env model → account's actual available models → static fallbacks
   const accountModels = await fetchGroqAvailableModels();
-  const chain = [groqWorkingModel, GROQ_MODEL, ...accountModels, ...GROQ_FALLBACKS]
+  const chain = [lang === 'ur' ? URDU_MODEL : null, groqWorkingModel, GROQ_MODEL, ...accountModels, ...GROQ_FALLBACKS]
     .filter(Boolean)
     .filter((m, i, a) => a.indexOf(m) === i && !groqDeadModels.has(m));
   let lastErr = null, data = null, usedModel = null;
   for (const m of chain) {
-    try { data = await callGroq(m, messages); usedModel = m; groqWorkingModel = m; console.log(`[groq] Using model: ${m}`); break; }
+    try { data = await callGroq(m, messages); usedModel = m; if (lang !== 'ur') groqWorkingModel = m; console.log(`[groq] Using model: ${m}`); break; }
     catch (e) {
       lastErr = e;
       if (e.status === 404) { console.warn(`[groq] model '${m}' not available for this account, trying next`); continue; }
@@ -898,6 +930,10 @@ Elapsed interview time: ${elapsedSec}s / 900s target`;
   if (out.action !== 'followup' && out.action !== 'clarify') out = { action: 'next', ack: typeof out.ack === 'string' ? out.ack.trim().slice(0, 160) : '' };
   if (out.action === 'followup' && (budget <= 0 || !out.q)) out = { action: 'next', ack: '' };
   if ((out.action === 'followup' || out.action === 'clarify') && typeof out.q === 'string') out.q = out.q.trim().slice(0, 160);
+  if (lang === 'ur') {
+    if (typeof out.ack === 'string' && out.ack) out.ack = await urduScriptOnly(out.ack);
+    if (typeof out.q === 'string' && out.q) out.q = await urduScriptOnly(out.q);
+  }
   return { ...out, model: usedModel };
 }
 
@@ -1252,7 +1288,7 @@ async function api(req, res, url) {
     const h = trHits.get(ip) || { n: 0, t: now };
     if (now - h.t > 60000) { h.n = 0; h.t = now; }
     h.n++; trHits.set(ip, h);
-    if (h.n > 20) return send(res, 200, { ok: false, reason: 'rate-limited' });
+    if (h.n > 60) return send(res, 200, { ok: false, reason: 'rate-limited' });
     const b = await readBody(req);
     const texts = (Array.isArray(b.texts) ? b.texts : []).slice(0, 12).map((x) => String(x || ''));
     if (!texts.length) return send(res, 200, { ok: false, reason: 'empty' });
@@ -1261,7 +1297,7 @@ async function api(req, res, url) {
       return send(res, 200, { ok: out.every(Boolean), texts: out });
     } catch (e) {
       console.warn('[translate] failed:', e.message);
-      return send(res, 200, { ok: false, reason: 'ai-error' });
+      return send(res, 200, { ok: false, reason: 'ai-error', detail: String(e.message || '').slice(0, 160) });
     }
   }
   if (r0 === 'tts' && m === 'POST') {
