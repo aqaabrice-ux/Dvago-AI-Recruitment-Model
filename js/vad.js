@@ -46,7 +46,7 @@
       positiveSpeechThreshold: 0.6,
       negativeSpeechThreshold: 0.4,
       preSpeechPadFrames: 2,
-      redemptionFrames: 24, // ~1.5s silence after speech
+      redemptionFrames: opts.redemptionFrames || 24, // ~1.5s silence after speech (longer for Urdu: opts.redemptionFrames)
       minSpeechFrames: 4,
       submitUserSpeechOnPause: false,
       onSpeechStart: () => { try { opts.onSpeechStart && opts.onSpeechStart(); } catch (e) {} },

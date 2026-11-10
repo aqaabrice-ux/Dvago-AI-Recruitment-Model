@@ -1342,7 +1342,7 @@
         V.mediaStream = V.keepStream;
         const mime = window.MediaRecorder && (MediaRecorder.isTypeSupported('audio/webm;codecs=opus') ? 'audio/webm;codecs=opus' : MediaRecorder.isTypeSupported('audio/webm') ? 'audio/webm' : MediaRecorder.isTypeSupported('audio/mp4') ? 'audio/mp4' : '');
         if (window.MediaRecorder) {
-          V.mediaRec = new MediaRecorder(V.mediaStream, mime ? { mimeType: mime, audioBitsPerSecond: 32000 } : { audioBitsPerSecond: 32000 });
+          V.mediaRec = new MediaRecorder(V.mediaStream, mime ? { mimeType: mime, audioBitsPerSecond: UR ? 64000 : 32000 } : { audioBitsPerSecond: UR ? 64000 : 32000 });
           V.mediaRec.ondataavailable = (e) => { if (e.data && e.data.size) V.mediaChunks.push(e.data); };
           V.mediaRec.start(250);
         }
@@ -1375,6 +1375,7 @@
       try {
         if (window.VAD && VAD.isSupported()) {
           V.vad = await VAD.startMic({
+            redemptionFrames: UR ? 44 : 24,   // Urdu speakers pause more: wait ~2.8s of silence before auto-stopping
             onSpeechEnd: () => { if (V.rec && V.phase === 'recording') { setTimeout(() => { if (V.phase === 'recording') stopRec(false); }, 100); } }
           });
         }
@@ -1425,7 +1426,8 @@
         }
         // Accurate final text from Whisper (server); falls back to the browser's live text when unavailable.
         let text = browserText, engine = 'browser';
-        const wt = audioData && dur >= 1 ? await whisperText(audioData.dataUrl) : '';
+        let wt = audioData && dur >= 1 ? await whisperText(audioData.dataUrl) : '';
+        if (!wt && audioData && dur >= 1) wt = await whisperText(audioData.dataUrl);   // one retry (rate limit / network blip)
         if (wt && !(HALLUCINATION.test(wt) && browserText)) { text = wt; engine = 'whisper'; }
         if (!text) {
           if (V.live) V.live.remove();
@@ -1438,7 +1440,7 @@
     }
 
     // Whisper on the server: returns the transcript, or '' if unavailable / timed out (caller then uses the browser text).
-    const HALLUCINATION = /^\W*(thank you( so much)?( for watching)?|thanks for watching|you|bye)\W*$/i;
+    const HALLUCINATION = /^\W*(thank you( so much)?( for watching)?|thanks for watching|you|bye|شکریہ|دیکھنے کا شکریہ|ویڈیو دیکھنے کا شکریہ|سبسکرائب کریں)\W*$/i;
     async function whisperText(dataUrl) {
       const ctl = typeof AbortController === 'function' ? new AbortController() : null;
       const timer = setTimeout(() => ctl && ctl.abort(), 25000);
