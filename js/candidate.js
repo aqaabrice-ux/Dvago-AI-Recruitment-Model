@@ -1357,10 +1357,11 @@
     async function startRec() {
       await startAudioCapture();
       V.live = addMsg('me', '');
-      V.live.querySelector('.txt').innerHTML = '<span class="interim">Listening…</span>';
+      V.live.querySelector('.txt').innerHTML = UR ? '<span class="interim">Recording your answer… بولتے رہیں</span>' : '<span class="interim">Listening…</span>';
       V.rec = Voice.recognizer({
         lang: S.voiceLang,
-        onText: (f, i) => { if (V.live) V.live.querySelector('.txt').innerHTML = esc(f) + ' <span class="interim">' + esc(i) + '</span>'; V.chat.scrollTop = V.chat.scrollHeight; },
+        // Urdu: the browser's live Urdu captions are unreliable and would confuse candidates; the accurate text (Whisper) is shown after they stop.
+        onText: (f, i) => { if (UR) return; if (V.live) V.live.querySelector('.txt').innerHTML = esc(f) + ' <span class="interim">' + esc(i) + '</span>'; V.chat.scrollTop = V.chat.scrollHeight; },
         onError: (err) => {
           if (err === 'not-allowed' || err === 'service-not-allowed' || err === 'audio-capture') {
             UI.toast('Microphone is not available — switching to typing.', 'error');
@@ -1440,8 +1441,27 @@
           return setPhase('ready');
         }
         if (V.live) V.live.remove();
+        // Urdu: show what was heard and let the candidate fix any wrong word before it is submitted.
+        if (UR) return confirmUrdu(text, engine, (finalText, eng) => commit(finalText, 'voice', dur, audioData, eng, browserText));
         commit(text, 'voice', dur, audioData, engine, browserText);
       }, 700);
+    }
+
+    function confirmUrdu(text, engine, ok) {
+      V.phase = 'confirm';
+      const warn = engine === 'browser' ? '<div class="mic-hint" style="color:#ffb4b8">The AI transcription was not available, so this is the basic browser text — please check it carefully.</div>' : '';
+      V.ctl.innerHTML = `<div class="type-box">${warn}<div class="mic-hint">جو مجھے سنائی دیا وہ یہ ہے۔ اگر کوئی لفظ غلط ہو تو ٹھیک کر لیں۔ · Check what I heard and fix any wrong word.</div>
+        <textarea class="input" id="urConfirm" dir="rtl" lang="ur" rows="4"></textarea>
+        <div class="row" style="justify-content:center;margin-top:10px"><button class="btn btn-ghost" id="urRedo">${I('refresh', 16)} Record again</button><button class="btn btn-primary btn-lg" id="urOk">Continue ${I('right', 18)}</button></div></div>`;
+      const ta = $('#urConfirm'); ta.value = text; ta.focus();
+      ta.addEventListener('paste', (e) => { e.preventDefault(); S.integrity.pasteAttempts++; logEvent('paste', 'voice transcript edit'); UI.toast('Pasting is disabled — please type your own words.', 'error'); });
+      $('#urRedo').addEventListener('click', () => setPhase('ready'));
+      $('#urOk').addEventListener('click', () => {
+        const t = ta.value.trim();
+        if (wc(t) < 1) return UI.toast('The answer is empty — please record again or type it.', 'error');
+        $('#urOk').disabled = true;
+        ok(t, t !== text.trim() ? engine + '+edited' : engine);
+      });
     }
 
     // Whisper on the server: returns the transcript, or '' if unavailable / timed out (caller then uses the browser text).
