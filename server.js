@@ -5,6 +5,7 @@
  *   npm install  &&  set ANTHROPIC_API_KEY=sk-ant-...  &&  node server.js
  */
 const http = require('http');
+const zlib = require('zlib');
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
@@ -341,8 +342,14 @@ const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; cha
 const SECURITY_HEADERS = { 'X-Content-Type-Options': 'nosniff', 'Referrer-Policy': 'same-origin', 'X-Frame-Options': 'SAMEORIGIN' };
 
 function send(res, code, obj) {
-  res.writeHead(code, Object.assign({ 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' }, SECURITY_HEADERS));
-  res.end(JSON.stringify(obj));
+  const body = Buffer.from(JSON.stringify(obj));
+  const h = Object.assign({ 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' }, SECURITY_HEADERS);
+  if (body.length > 1024 && /\bgzip\b/.test((res.req && res.req.headers['accept-encoding']) || '')) {
+    h['Content-Encoding'] = 'gzip'; h['Vary'] = 'Accept-Encoding';
+    return zlib.gzip(body, (e, z) => { if (e) { delete h['Content-Encoding']; res.writeHead(code, h); return res.end(body); } res.writeHead(code, h); res.end(z); });
+  }
+  res.writeHead(code, h);
+  res.end(body);
 }
 function readBody(req) {
   return new Promise((resolve, reject) => {
@@ -388,6 +395,8 @@ function resolveQuestions(roleKey, positionId) {
     if (pq.simulation && pq.simulation.title) { out.simulation = pq.simulation; out.source = 'position'; }
     if (pq.caseStudy && Array.isArray(pq.caseStudy.questions) && pq.caseStudy.questions.length) { out.caseStudy = pq.caseStudy; out.source = 'position'; }
   }
+  // strip the generator's leftover instruction "(mention the position)" from spoken questions
+  if (Array.isArray(out.voice)) out.voice = out.voice.map((v) => (v && typeof v.q === 'string' && /\(\s*mention[^)]*\)/i.test(v.q)) ? Object.assign({}, v, { q: v.q.replace(/\s*\(\s*mention[^)]*\)/ig, '').trim() }) : v);
   return out;
 }
 // ---- after the 2nd-round interview: panel feedback and the job offer ----
@@ -2307,7 +2316,14 @@ function serveStatic(req, res, url) {
   }
   fs.stat(fp, (err, st) => {
     if (err || !st.isFile()) { res.writeHead(404); return res.end('Not found'); }
-    res.writeHead(200, Object.assign({ 'Content-Type': MIME[path.extname(fp).toLowerCase()] || 'application/octet-stream', 'Cache-Control': 'no-cache' }, SECURITY_HEADERS));
+    const ext = path.extname(fp).toLowerCase();
+    const h = Object.assign({ 'Content-Type': MIME[ext] || 'application/octet-stream', 'Cache-Control': 'no-cache' }, SECURITY_HEADERS);
+    if (['.js', '.css', '.html', '.json', '.svg'].includes(ext) && st.size > 1024 && /\bgzip\b/.test(req.headers['accept-encoding'] || '')) {
+      h['Content-Encoding'] = 'gzip'; h['Vary'] = 'Accept-Encoding';
+      res.writeHead(200, h);
+      return fs.createReadStream(fp).pipe(zlib.createGzip()).pipe(res);
+    }
+    res.writeHead(200, h);
     fs.createReadStream(fp).pipe(res);
   });
 }
