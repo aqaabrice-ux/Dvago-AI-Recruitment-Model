@@ -18,6 +18,7 @@
   // After the fixed (scored) voice questions SARAH asks a few personalised deep-dive questions. They are NOT scored,
   // so every candidate is still compared on the same core questions; recruiters see them separately.
   const ADAPTIVE_COUNT = 2;
+  const DEMO_SKIP_VOICE = true;   // DEMO: shows a "Complete voice interview" button. Set to false to remove it.
   const ADAPTIVE_BACKUP = ['Tell me about a challenge you faced in your most recent role and how you handled it.', 'Which part of this position do you feel most confident about, and which part would you want support to learn?'];
   const GAME_SECONDS = 40;
   // Urdu interview mode: SARAH shows + speaks Urdu. Questions are translated by the server (Groq); these fixed lines are pre-written.
@@ -173,6 +174,7 @@
   const orbState = (orb, st) => orb && orb.setAttribute('data-state', st);
 
   async function say(text, orb, captionEl) {
+    if (S) Voice.sid = S.sessionId;
     const ur = isUrdu(text);
     if (captionEl) { captionEl.setAttribute('dir', ur ? 'rtl' : 'ltr'); if (ur) captionEl.setAttribute('lang', 'ur'); else captionEl.removeAttribute('lang'); }
     const typing = captionEl ? UI.typeText(captionEl, text, 24) : Promise.resolve();
@@ -1157,6 +1159,7 @@
     });
     $('#spkBtn').addEventListener('click', async () => {
       $('#spkTxt').textContent = 'Playing…';
+      Voice.sid = S.sessionId;
       if (S.voiceLang === 'ur-PK') await Voice.speak('ہیلو! کیا آپ مجھے کلیئرلی سن سکتے ہیں؟ گریٹ، چلیں آگے بڑھتے ہیں۔', { lang: 'ur-PK' });
       else await Voice.speak('Hello! Can you hear me clearly? Great, let\'s continue.');
       $('#spkTxt').innerHTML = `<span style="color:var(--g-300)">Played. If you heard SARAH, your speakers are fine.</span>`;
@@ -1199,6 +1202,7 @@
         <div><div class="h3">Voice conversation</div><p class="small muted" id="vLabel"></p></div>
         <div class="v-progress" id="vProg">${qs.map(() => '<i></i>').join('')}</div>
         <p class="small muted">Speak naturally, like a real conversation. Aim for 1–2 minutes per answer. ${S.voiceLang === 'ur-PK' ? 'Answering in Urdu.' : ''}</p>
+        ${DEMO_SKIP_VOICE ? '<button class="btn ghost" id="demoSkipVoice" style="margin-top:12px;width:100%">Complete voice interview (demo) →</button>' : ''}
       </aside>
       <section class="glass voice-main">
         <div class="q-top"><span class="q-tag">${I('mic', 14)} Step 3 · Voice interview</span><span class="q-count" id="vCount"></span></div>
@@ -1210,6 +1214,14 @@
     const onEnterKey = (ev) => { if (ev.key === 'Enter' && V.phase === 'recording' && !ev.repeat) { ev.preventDefault(); stopRec(false); } };
     document.addEventListener('keydown', onEnterKey);
     onLeave(() => { V.alive = false; document.removeEventListener('keydown', onEnterKey); stopRec(true); teardownAudio(); });
+    // DEMO ONLY: lets a presenter skip the rest of the voice interview. Remove by setting DEMO_SKIP_VOICE = false.
+    const demoSkip = $('#demoSkipVoice');
+    if (demoSkip) demoSkip.addEventListener('click', () => {
+      if (!confirm('Skip the rest of the voice interview and go to the assessment?')) return;
+      try { Voice.stop(); } catch (e) {}
+      S.voiceIdx = qs.length; S.voiceSkipped = true; save();
+      go('brief');
+    });
 
     function teardownAudio() {
       try { if (V.mediaRec && V.mediaRec.state !== 'inactive') V.mediaRec.stop(); } catch (e) {}
